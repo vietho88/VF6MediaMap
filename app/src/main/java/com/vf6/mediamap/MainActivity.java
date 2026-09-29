@@ -23,8 +23,7 @@ import java.util.List;
 public class MainActivity extends Activity {
     private EditText youtubeUrl;
     private EditText webUrl;
-    private EditText mapUrl;
-    private Spinner contentMode;
+        private Spinner contentMode;
     private Spinner ratio;
     private Spinner scale;
     private CheckBox autoResume;
@@ -43,7 +42,7 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(20, 20, 24));
         scroll.addView(root);
 
-        root.addView(text("VF6 MediaMap 1.1", 26, true));
+        root.addView(text("VF6 MediaMap 1.2.0", 26, true));
         root.addView(text("YouTube/Web + bản đồ trong cùng giao diện Android Auto. Các tính năng video chỉ nên dùng khi xe đã đỗ.", 15, false), lpMatchWrap(dp(8)));
 
         root.addView(text("Nội dung bên trái", 14, true), lpMatchWrap(dp(20)));
@@ -60,10 +59,8 @@ public class MainActivity extends Activity {
         root.addView(text("Web / TV portal URL", 14, true), lpMatchWrap(dp(16)));
         webUrl = input(Prefs.web(this));
         root.addView(webUrl, lpMatchWrap(dp(6)));
-
-        root.addView(text("Map URL", 14, true), lpMatchWrap(dp(16)));
-        mapUrl = input(Prefs.map(this));
-        root.addView(mapUrl, lpMatchWrap(dp(6)));
+        root.addView(text("Native Map", 14, true), lpMatchWrap(dp(16)));
+        root.addView(text("OpenStreetMap native pane: pinch/drag, GPS, long-press destination, voice search and NAV handoff.", 13, false), lpMatchWrap(dp(6)));
 
         root.addView(text("Tỷ lệ nội dung / Map", 14, true), lpMatchWrap(dp(16)));
         ratio = new Spinner(this);
@@ -130,7 +127,7 @@ public class MainActivity extends Activity {
         Prefs.save(this,
                 youtubeUrl.getText().toString(),
                 webUrl.getText().toString(),
-                mapUrl.getText().toString(),
+                Prefs.map(this),
                 contentMode.getSelectedItemPosition(),
                 ratios[ratio.getSelectedItemPosition()],
                 autoResume.isChecked(),

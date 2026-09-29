@@ -1,8 +1,9 @@
-# License notice
+# License notices
 
-VF6 MediaMap source in this repository is provided for experimental/personal use and is intended to be distributed under GPL-3.0-or-later when bundled with or derived from GPL-covered Fermata components.
+VF6 MediaMap uses or downloads third-party open-source components.
 
-The build workflow downloads `fermata/lib/auto/aauto.aar` from:
-https://github.com/AndreyPavlenko/Fermata
+- Fermata Auto Android Auto bridge (`aauto.aar`): from the official Fermata repository; Fermata is GPL-3.0 licensed.
+- osmdroid (`org.osmdroid:osmdroid-android:6.1.20`): open-source Android map rendering library.
+- OpenStreetMap map data/tiles: copyright OpenStreetMap contributors; ODbL attribution requirements apply.
 
-Fermata is licensed under GPL-3.0. Do not redistribute a combined APK without satisfying the applicable GPL source and license obligations.
+CarView Auto was reviewed only as a public product/UX reference. No CarView source code is included or claimed to be available.

@@ -47,7 +47,7 @@ final class SplitBrowserView extends LinearLayout {
     private final FrameLayout contentPane;
     private final FrameLayout mapPane;
     private final WebView content;
-    private final WebView map;
+    private final NativeMapPane map;
     private Button modeButton;
     private Button ratioButton;
     private Button voiceButton;
@@ -58,6 +58,7 @@ final class SplitBrowserView extends LinearLayout {
     private boolean swapped;
     private int ratio;
     private boolean desiredPlaying;
+    private boolean voiceTargetMap;
     private boolean fullscreenAttempted;
     private boolean destroyed;
     private View fullscreenView;
@@ -91,6 +92,7 @@ final class SplitBrowserView extends LinearLayout {
         this.swapped = Prefs.swapped(context);
         this.safeMode = !phonePreview;
         this.desiredPlaying = Prefs.lastWasPlaying(context);
+        this.voiceTargetMap = this.safeMode;
 
         setOrientation(VERTICAL);
         setBackgroundColor(Color.BLACK);
@@ -106,7 +108,7 @@ final class SplitBrowserView extends LinearLayout {
         contentPane = pane(Prefs.contentMode(context) == Prefs.MODE_WEB ? "WEB / TV" : "YOUTUBE");
         mapPane = pane("MAP");
         content = webView(true);
-        map = webView(false);
+        map = new NativeMapPane(context, this::activateMapVoiceTarget);
         contentPane.addView(content, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         mapPane.addView(map, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
@@ -119,7 +121,6 @@ final class SplitBrowserView extends LinearLayout {
             if (last != null && (last.startsWith("https://") || last.startsWith("http://"))) firstUrl = last;
         }
         content.loadUrl(firstUrl);
-        map.loadUrl(Prefs.map(context));
         rebuildSplit();
         handler.postDelayed(playbackMonitor, MONITOR_MS);
     }
@@ -168,7 +169,7 @@ final class SplitBrowserView extends LinearLayout {
         Button reload = smallButton("Reload");
         reload.setOnClickListener(v -> {
             content.reload();
-            map.reload();
+            map.refresh();
         });
         row2.addView(reload, weightButton(0.9f));
         outer.addView(row2, new LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
@@ -269,6 +270,12 @@ final class SplitBrowserView extends LinearLayout {
                 hideCustomView();
             }
         });
+        if (isContent) {
+            w.setOnTouchListener((v, event) -> {
+                if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) activateContentVoiceTarget();
+                return false;
+            });
+        }
         return w;
     }
 
@@ -277,28 +284,38 @@ final class SplitBrowserView extends LinearLayout {
         String scheme = uri.getScheme();
         if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
 
+        // Google Maps mobile uses intent:// for the "Open app" button.
+        // v1.1.1 swallowed that navigation on the car because external intents
+        // were only allowed in phonePreview mode, and it preferred the browser
+        // fallback before even trying the native application.
         if ("intent".equalsIgnoreCase(scheme)) {
             try {
                 Intent intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME);
-                String fallback = intent.getStringExtra("browser_fallback_url");
-                if (fallback != null && (fallback.startsWith("https://") || fallback.startsWith("http://"))) {
-                    view.loadUrl(fallback);
-                    return true;
-                }
-                if (phonePreview && intent.resolveActivity(context.getPackageManager()) != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
                     context.startActivity(intent);
+                    return true;
+                } catch (Throwable openError) {
+                    String fallback = intent.getStringExtra("browser_fallback_url");
+                    if (fallback != null && (fallback.startsWith("https://") || fallback.startsWith("http://"))) {
+                        view.loadUrl(fallback);
+                        return true;
+                    }
                 }
             } catch (Throwable ignored) {
             }
             return true;
         }
 
-        if (phonePreview) {
-            try {
-                Intent external = new Intent(Intent.ACTION_VIEW, uri);
-                if (external.resolveActivity(context.getPackageManager()) != null) context.startActivity(external);
-            } catch (Throwable ignored) {
-            }
+        // Support geo:, google.navigation:, market:, maps: and any other
+        // application deep link exposed by the page. This intentionally works
+        // in both the phone preview and the projected CarActivity.
+        try {
+            Intent external = new Intent(Intent.ACTION_VIEW, uri);
+            external.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(external);
+        } catch (Throwable ignored) {
+            Toast.makeText(context, "Không tìm thấy ứng dụng xử lý liên kết này.", Toast.LENGTH_SHORT).show();
         }
         return true;
     }
@@ -337,11 +354,12 @@ final class SplitBrowserView extends LinearLayout {
 
     private void toggleSafeMode() {
         safeMode = !safeMode;
+        voiceTargetMap = safeMode;
         if (!safeMode && !phonePreview) {
             Toast.makeText(context, "Parked Split: chỉ dùng video khi xe đã đỗ.", Toast.LENGTH_LONG).show();
         }
         modeButton.setText(safeMode ? "Parked Split" : "Drive Safe");
-        voiceButton.setText(safeMode ? "Mic Map" : (Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT"));
+        updateVoiceLabel();
         if (safeMode) hideCustomView();
         rebuildSplit();
     }
@@ -459,6 +477,27 @@ final class SplitBrowserView extends LinearLayout {
         handler.postDelayed(this::requestContentFullscreen, 450L);
     }
 
+    private boolean isMapVoiceTarget() {
+        return safeMode || voiceTargetMap;
+    }
+
+    private void activateMapVoiceTarget() {
+        voiceTargetMap = true;
+        updateVoiceLabel();
+    }
+
+    private void activateContentVoiceTarget() {
+        if (safeMode) return;
+        voiceTargetMap = false;
+        updateVoiceLabel();
+    }
+
+    private void updateVoiceLabel() {
+        if (voiceButton == null) return;
+        if (isMapVoiceTarget()) voiceButton.setText("Mic Map");
+        else voiceButton.setText(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
+    }
+
     private void setupMediaSession() {
         mediaSession = new MediaSession(context, "VF6MediaMap");
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
@@ -533,16 +572,18 @@ final class SplitBrowserView extends LinearLayout {
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag());
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, safeMode ? "Tìm địa điểm" : "Tìm nội dung");
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, isMapVoiceTarget() ? "Search map" : "Search content");
         speechRecognizer.startListening(i);
     }
 
     private void applyVoiceQuery(String query) {
         if (query == null || query.trim().isEmpty()) return;
+        if (isMapVoiceTarget()) {
+            map.search(query.trim());
+            return;
+        }
         String q = Uri.encode(query.trim());
-        if (safeMode) {
-            map.loadUrl("https://www.google.com/maps/search/?api=1&query=" + q);
-        } else if (Prefs.contentMode(context) == Prefs.MODE_YOUTUBE) {
+        if (Prefs.contentMode(context) == Prefs.MODE_YOUTUBE) {
             content.loadUrl("https://m.youtube.com/results?search_query=" + q);
         } else {
             content.loadUrl("https://www.google.com/search?q=" + q);
@@ -550,7 +591,7 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private void restoreVoiceLabel() {
-        voiceButton.setText(safeMode ? "Mic Map" : (Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT"));
+        updateVoiceLabel();
     }
 
     void onResume() {
@@ -579,7 +620,7 @@ final class SplitBrowserView extends LinearLayout {
             mediaSession = null;
         }
         destroyWebView(content);
-        destroyWebView(map);
+        map.destroy();
     }
 
     private static void destroyWebView(WebView w) {
