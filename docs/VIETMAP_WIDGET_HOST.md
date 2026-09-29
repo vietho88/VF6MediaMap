@@ -1,31 +1,18 @@
-# VietMap Widget Host experiment
+# VietMap widget host
 
-## Goal
+VF6 MediaMap hosts VietMap Live only when the installed VietMap package publishes a
+standard Android `AppWidgetProvider`. It uses `AppWidgetHost`, `AppWidgetHostView` and
+one bound `appWidgetId`.
 
-Reuse the VietMap Live installation already present on the phone instead of duplicating its map, routing, camera and speed-limit data.
+## v1.6 behavior
 
-## Android mechanism
+- Phone Preview and CarActivity keep separate overlay x/y/width/height preferences.
+- Compact and Expanded presets update AppWidget size options for the current surface.
+- A conservative watchdog checks the widget while `AppWidgetHost.startListening()` is active.
+- The watchdog reloads only after repeated structural failures; it does not use a periodic
+  forced refresh, avoiding unnecessary flashes.
+- Provider background stripping is performed synchronously/pre-draw to reduce the gray-card
+  flash seen when VietMap updates its RemoteViews frequently.
 
-The experiment uses the platform widget host APIs:
-
-- `AppWidgetManager.getInstalledProviders()` to discover providers.
-- `AppWidgetHost.allocateAppWidgetId()` to allocate an ID owned by VF6 MediaMap.
-- `AppWidgetManager.bindAppWidgetIdIfAllowed()` or `ACTION_APPWIDGET_BIND` for user-approved binding.
-- `AppWidgetHostView` to render provider `RemoteViews`.
-- `updateAppWidgetOptions()` to request compact/medium/large dimensions.
-
-The app persists the bound `appWidgetId`, so `MainActivity`, `PreviewActivity`, and `CarMainActivity` can refer to the same widget instance.
-
-## Hard boundary
-
-This only works for a standard Android AppWidget. Android does not offer an API for one app to steal/reparent another app's arbitrary overlay window or the view tree of another process. An Android Auto widget implemented inside VietMap's own car service is also not automatically an AppWidget.
-
-## Diagnostics
-
-If provider discovery is empty, inspect the installed package rather than inventing provider class names:
-
-```powershell
-adb shell pm path vn.vietmap.live
-adb shell cmd package query-receivers --components -a android.appwidget.action.APPWIDGET_UPDATE -p vn.vietmap.live
-adb shell dumpsys package vn.vietmap.live > vietmap_package.txt
-```
+Because the RemoteViews are owned by VietMap, not every provider background or internal
+bitmap can be made transparent by the host.

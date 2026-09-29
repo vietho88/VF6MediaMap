@@ -20,12 +20,13 @@ final class Prefs {
     static final String VIETMAP_WIDGET_ID = "vietmap_widget_id";
     static final String VIETMAP_WIDGET_PROVIDER = "vietmap_widget_provider";
     static final String VIETMAP_WIDGET_ENABLED = "vietmap_widget_enabled";
-    static final String VIETMAP_WIDGET_SIZE = "vietmap_widget_size";
+    static final String VIETMAP_WIDGET_SIZE = "vietmap_widget_size"; // legacy
     static final String VIETMAP_WIDGET_POSITION = "vietmap_widget_position";
     static final String VIETMAP_WIDGET_X = "vietmap_widget_x";
     static final String VIETMAP_WIDGET_Y = "vietmap_widget_y";
     static final String VIETMAP_WIDGET_WIDTH_DP = "vietmap_widget_width_dp";
     static final String VIETMAP_WIDGET_HEIGHT_DP = "vietmap_widget_height_dp";
+    static final String VIETMAP_WIDGET_PRESET = "vietmap_widget_preset";
 
     static final int MODE_YOUTUBE = 0;
     static final int MODE_WEB = 1;
@@ -34,10 +35,16 @@ final class Prefs {
     static final int WIDGET_MEDIUM = 1;
     static final int WIDGET_LARGE = 2;
 
+    static final int WIDGET_PRESET_COMPACT = 0;
+    static final int WIDGET_PRESET_EXPANDED = 1;
+
     static final int POS_TOP_RIGHT = 0;
     static final int POS_TOP_LEFT = 1;
     static final int POS_BOTTOM_RIGHT = 2;
     static final int POS_BOTTOM_LEFT = 3;
+
+    private static final String SCOPE_PHONE = "_phone";
+    private static final String SCOPE_CAR = "_car";
 
     static SharedPreferences get(Context c) {
         return c.getSharedPreferences("vf6_mediamap", Context.MODE_PRIVATE);
@@ -103,12 +110,23 @@ final class Prefs {
         return get(c).getBoolean(VIETMAP_WIDGET_ENABLED, true);
     }
 
+    // Legacy S/M/L size helpers kept for compatibility with older installs.
     static int vietMapWidgetSize(Context c) {
         return get(c).getInt(VIETMAP_WIDGET_SIZE, WIDGET_MEDIUM);
     }
 
+    static void setVietMapWidgetSize(Context c, int size) {
+        int value = Math.max(WIDGET_SMALL, Math.min(WIDGET_LARGE, size));
+        get(c).edit().putInt(VIETMAP_WIDGET_SIZE, value).apply();
+    }
+
     static int vietMapWidgetPosition(Context c) {
         return get(c).getInt(VIETMAP_WIDGET_POSITION, POS_TOP_RIGHT);
+    }
+
+    static void setVietMapWidgetPosition(Context c, int position) {
+        int value = Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, position));
+        get(c).edit().putInt(VIETMAP_WIDGET_POSITION, value).apply();
     }
 
     static float vietMapWidgetX(Context c) {
@@ -125,6 +143,69 @@ final class Prefs {
 
     static int vietMapWidgetHeightDp(Context c) {
         return get(c).getInt(VIETMAP_WIDGET_HEIGHT_DP, 0);
+    }
+
+    // v1.6: phone preview and Android Auto keep separate VM layouts.
+    private static String scoped(String base, boolean phonePreview) {
+        return base + (phonePreview ? SCOPE_PHONE : SCOPE_CAR);
+    }
+
+    private static boolean has(Context c, String key) {
+        return get(c).contains(key);
+    }
+
+    static int vietMapWidgetPreset(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_PRESET, phonePreview);
+        if (has(c, key)) {
+            return Math.max(WIDGET_PRESET_COMPACT,
+                    Math.min(WIDGET_PRESET_EXPANDED, get(c).getInt(key, WIDGET_PRESET_COMPACT)));
+        }
+        // Migrate older S/M/L preference to the closest two-profile model.
+        int old = vietMapWidgetSize(c);
+        return old == WIDGET_LARGE ? WIDGET_PRESET_EXPANDED : WIDGET_PRESET_COMPACT;
+    }
+
+    static void setVietMapWidgetPreset(Context c, boolean phonePreview, int preset) {
+        int value = Math.max(WIDGET_PRESET_COMPACT, Math.min(WIDGET_PRESET_EXPANDED, preset));
+        get(c).edit().putInt(scoped(VIETMAP_WIDGET_PRESET, phonePreview), value).apply();
+    }
+
+    static int vietMapWidgetPosition(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_POSITION, phonePreview);
+        if (has(c, key)) {
+            return Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, get(c).getInt(key, POS_TOP_RIGHT)));
+        }
+        return vietMapWidgetPosition(c);
+    }
+
+    static void setVietMapWidgetPosition(Context c, boolean phonePreview, int position) {
+        int value = Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, position));
+        get(c).edit().putInt(scoped(VIETMAP_WIDGET_POSITION, phonePreview), value).apply();
+    }
+
+    static float vietMapWidgetX(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_X, phonePreview);
+        if (has(c, key)) return get(c).getFloat(key, -1f);
+        // One-time friendly fallback from v1.5 shared layout.
+        return vietMapWidgetX(c);
+    }
+
+    static float vietMapWidgetY(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_Y, phonePreview);
+        if (has(c, key)) return get(c).getFloat(key, -1f);
+        return vietMapWidgetY(c);
+    }
+
+    static int vietMapWidgetWidthDp(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_WIDTH_DP, phonePreview);
+        if (has(c, key)) return get(c).getInt(key, 0);
+        return vietMapWidgetWidthDp(c);
+    }
+
+    static int vietMapWidgetHeightDp(Context c, boolean phonePreview) {
+        String key = scoped(VIETMAP_WIDGET_HEIGHT_DP, phonePreview);
+        if (has(c, key)) return get(c).getInt(key, 0);
+        return vietMapWidgetHeightDp(c);
     }
 
     static void save(Context c, String youtube, String web, int contentMode,
@@ -160,22 +241,22 @@ final class Prefs {
         get(c).edit().putBoolean(VIETMAP_WIDGET_ENABLED, enabled).apply();
     }
 
-    static void setVietMapWidgetSize(Context c, int size) {
-        int value = Math.max(WIDGET_SMALL, Math.min(WIDGET_LARGE, size));
-        get(c).edit().putInt(VIETMAP_WIDGET_SIZE, value).apply();
-    }
-
-    static void setVietMapWidgetPosition(Context c, int position) {
-        int value = Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, position));
-        get(c).edit().putInt(VIETMAP_WIDGET_POSITION, value).apply();
-    }
-
     static void setVietMapWidgetCustomLayout(Context c, float x, float y, int widthDp, int heightDp) {
         get(c).edit()
                 .putFloat(VIETMAP_WIDGET_X, Math.max(0f, Math.min(1f, x)))
                 .putFloat(VIETMAP_WIDGET_Y, Math.max(0f, Math.min(1f, y)))
                 .putInt(VIETMAP_WIDGET_WIDTH_DP, Math.max(160, widthDp))
                 .putInt(VIETMAP_WIDGET_HEIGHT_DP, Math.max(56, heightDp))
+                .apply();
+    }
+
+    static void setVietMapWidgetCustomLayout(Context c, boolean phonePreview,
+                                              float x, float y, int widthDp, int heightDp) {
+        get(c).edit()
+                .putFloat(scoped(VIETMAP_WIDGET_X, phonePreview), Math.max(0f, Math.min(1f, x)))
+                .putFloat(scoped(VIETMAP_WIDGET_Y, phonePreview), Math.max(0f, Math.min(1f, y)))
+                .putInt(scoped(VIETMAP_WIDGET_WIDTH_DP, phonePreview), Math.max(160, widthDp))
+                .putInt(scoped(VIETMAP_WIDGET_HEIGHT_DP, phonePreview), Math.max(56, heightDp))
                 .apply();
     }
 
@@ -186,10 +267,35 @@ final class Prefs {
                 .apply();
     }
 
+    static void clearVietMapWidgetCustomSize(Context c, boolean phonePreview) {
+        get(c).edit()
+                .remove(scoped(VIETMAP_WIDGET_WIDTH_DP, phonePreview))
+                .remove(scoped(VIETMAP_WIDGET_HEIGHT_DP, phonePreview))
+                .apply();
+    }
+
     static void clearVietMapWidgetCustomPosition(Context c) {
         get(c).edit()
                 .remove(VIETMAP_WIDGET_X)
                 .remove(VIETMAP_WIDGET_Y)
+                .apply();
+    }
+
+    static void clearVietMapWidgetCustomPosition(Context c, boolean phonePreview) {
+        get(c).edit()
+                .remove(scoped(VIETMAP_WIDGET_X, phonePreview))
+                .remove(scoped(VIETMAP_WIDGET_Y, phonePreview))
+                .apply();
+    }
+
+    static void resetVietMapLayout(Context c, boolean phonePreview) {
+        get(c).edit()
+                .remove(scoped(VIETMAP_WIDGET_X, phonePreview))
+                .remove(scoped(VIETMAP_WIDGET_Y, phonePreview))
+                .remove(scoped(VIETMAP_WIDGET_WIDTH_DP, phonePreview))
+                .remove(scoped(VIETMAP_WIDGET_HEIGHT_DP, phonePreview))
+                .putInt(scoped(VIETMAP_WIDGET_PRESET, phonePreview), WIDGET_PRESET_COMPACT)
+                .putInt(scoped(VIETMAP_WIDGET_POSITION, phonePreview), POS_TOP_RIGHT)
                 .apply();
     }
 

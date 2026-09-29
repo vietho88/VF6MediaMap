@@ -60,10 +60,10 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(20, 20, 24));
         scroll.addView(root);
 
-        root.addView(text("VF6 MediaMap 1.4.0", 26, true));
+        root.addView(text("VF6 MediaMap 1.6.0", 26, true));
         root.addView(text(
-                "YouTube/Web toàn màn hình + thử host trực tiếp widget chuẩn Android của VietMap Live. " +
-                        "Nếu VietMap không công khai AppWidgetProvider thì app sẽ báo rõ để mình đổi hướng ở bản sau.",
+                "YouTube/Web toàn màn hình + VietMap Live widget. v1.6 có watchdog tự phục hồi, " +
+                        "layout riêng cho điện thoại/Android Auto và preset Compact/Expanded.",
                 15, false), lpMatchWrap(dp(8)));
 
         root.addView(text("Nội dung", 14, true), lpMatchWrap(dp(20)));
@@ -112,18 +112,18 @@ public class MainActivity extends Activity {
         widgetProviderSpinner = new Spinner(this);
         root.addView(widgetProviderSpinner, lpMatchWrap(dp(6)));
 
-        root.addView(text("Kích thước overlay", 14, true), lpMatchWrap(dp(14)));
+        root.addView(text("Preset overlay trên điện thoại", 14, true), lpMatchWrap(dp(14)));
         widgetSizeSpinner = new Spinner(this);
         widgetSizeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"Nhỏ 260×86dp", "Vừa 360×112dp", "Lớn 480×156dp"}));
-        widgetSizeSpinner.setSelection(Prefs.vietMapWidgetSize(this));
+                new String[]{"Compact 300×92dp", "Expanded 460×150dp"}));
+        widgetSizeSpinner.setSelection(Prefs.vietMapWidgetPreset(this, true));
         root.addView(widgetSizeSpinner, lpMatchWrap(dp(6)));
 
         root.addView(text("Vị trí overlay", 14, true), lpMatchWrap(dp(14)));
         widgetPositionSpinner = new Spinner(this);
         widgetPositionSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"Trên phải", "Trên trái", "Dưới phải", "Dưới trái"}));
-        widgetPositionSpinner.setSelection(Prefs.vietMapWidgetPosition(this));
+        widgetPositionSpinner.setSelection(Prefs.vietMapWidgetPosition(this, true));
         root.addView(widgetPositionSpinner, lpMatchWrap(dp(6)));
 
         Button refreshWidget = button("QUÉT LẠI WIDGET VIETMAP");
@@ -137,6 +137,22 @@ public class MainActivity extends Activity {
         Button removeWidget = button("GỠ WIDGET ĐÃ KẾT NỐI");
         removeWidget.setOnClickListener(v -> removeBoundWidget());
         root.addView(removeWidget, lpMatchWrap(dp(8)));
+
+        Button resetPhoneLayout = button("RESET LAYOUT VIETMAP - ĐIỆN THOẠI");
+        resetPhoneLayout.setOnClickListener(v -> {
+            Prefs.resetVietMapLayout(this, true);
+            widgetSizeSpinner.setSelection(Prefs.vietMapWidgetPreset(this, true));
+            widgetPositionSpinner.setSelection(Prefs.vietMapWidgetPosition(this, true));
+            Toast.makeText(this, "Đã reset layout VietMap trên điện thoại.", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(resetPhoneLayout, lpMatchWrap(dp(8)));
+
+        Button resetCarLayout = button("RESET LAYOUT VIETMAP - ANDROID AUTO");
+        resetCarLayout.setOnClickListener(v -> {
+            Prefs.resetVietMapLayout(this, false);
+            Toast.makeText(this, "Đã reset layout VietMap trên Android Auto.", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(resetCarLayout, lpMatchWrap(dp(8)));
 
         Button save = button("LƯU CẤU HÌNH");
         save.setOnClickListener(v -> savePrefs());
@@ -165,8 +181,9 @@ public class MainActivity extends Activity {
         root.addView(reset, lpMatchWrap(dp(10)));
 
         TextView note = text(
-                "Sau khi bind thành công, Preview và CarActivity sẽ dùng cùng appWidgetId. " +
-                        "Nếu danh sách provider bằng 0 dù VietMap Live đã cài, widget Android Auto của VietMap không phải AppWidget chuẩn và không thể host theo cách này.",
+                "Preview và CarActivity dùng cùng appWidgetId nhưng lưu vị trí/kích thước riêng. " +
+                        "VM C/VM X đổi nhanh Compact/Expanded; giữ lâu nút preset để reset layout của màn hiện tại. " +
+                        "Watchdog chỉ reload khi widget bị mất cây view/provider, không reload theo timer bình thường.",
                 13, false);
         note.setTextColor(Color.LTGRAY);
         root.addView(note, lpMatchWrap(dp(22)));
@@ -294,7 +311,7 @@ public class MainActivity extends Activity {
 
         int id = widgetHost.allocateAppWidgetId();
         pendingWidgetId = id;
-        Bundle options = VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this));
+        Bundle options = VietMapWidgetHost.optionsForPreset(Prefs.vietMapWidgetPreset(this, true));
         boolean allowed = false;
         try {
             allowed = AppWidgetManager.getInstance(this)
@@ -338,7 +355,7 @@ public class MainActivity extends Activity {
             try {
                 widgetHost.startAppWidgetConfigureActivityForResult(
                         this, id, 0, REQ_CONFIGURE_WIDGET,
-                        VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this)));
+                        VietMapWidgetHost.optionsForPreset(Prefs.vietMapWidgetPreset(this, true)));
                 return;
             } catch (Throwable ignored) {
                 // Some providers declare a configure component that cannot be started by third-party hosts.
@@ -396,13 +413,16 @@ public class MainActivity extends Activity {
     }
 
     private void saveWidgetLayoutPrefs() {
-        Prefs.setVietMapWidgetSize(this, widgetSizeSpinner.getSelectedItemPosition());
-        Prefs.setVietMapWidgetPosition(this, widgetPositionSpinner.getSelectedItemPosition());
+        int preset = widgetSizeSpinner.getSelectedItemPosition() == 1
+                ? Prefs.WIDGET_PRESET_EXPANDED : Prefs.WIDGET_PRESET_COMPACT;
+        Prefs.setVietMapWidgetPreset(this, true, preset);
+        Prefs.setVietMapWidgetPosition(this, true, widgetPositionSpinner.getSelectedItemPosition());
+        Prefs.clearVietMapWidgetCustomSize(this, true);
         int id = Prefs.vietMapWidgetId(this);
         if (id != AppWidgetManager.INVALID_APPWIDGET_ID) {
             try {
                 AppWidgetManager.getInstance(this).updateAppWidgetOptions(
-                        id, VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this)));
+                        id, VietMapWidgetHost.optionsForPreset(preset));
             } catch (Throwable ignored) {
             }
         }

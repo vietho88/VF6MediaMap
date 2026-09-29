@@ -10,6 +10,8 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.util.SizeF;
 import android.view.Gravity;
@@ -33,12 +35,18 @@ final class VietMapWidgetHost extends FrameLayout {
 
     private static final int MIN_WIDTH_DP = 180;
     private static final int MIN_HEIGHT_DP = 64;
+    private static final long WATCHDOG_MS = 8000L;
 
     private final Context context;
+    private final boolean phonePreview;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private final TransparentWidgetHost host;
     private AppWidgetHostView hostView;
     private boolean listening;
     private boolean editMode;
+    private boolean destroyed;
+    private int unhealthyWatchdogTicks;
+    private long lastRemoteViewsUpdateAt;
 
     private float dragRawX;
     private float dragRawY;
@@ -48,10 +56,11 @@ final class VietMapWidgetHost extends FrameLayout {
     private int pinchStartWidth;
     private int pinchStartHeight;
 
-    VietMapWidgetHost(Context context) {
+    VietMapWidgetHost(Context context, boolean phonePreview) {
         super(context);
         this.context = context;
-        this.host = new TransparentWidgetHost(context, HOST_ID);
+        this.phonePreview = phonePreview;
+        this.host = new TransparentWidgetHost(context, HOST_ID, this::onRemoteViewsUpdated);
         setClipChildren(true);
         setClipToPadding(true);
         setBackgroundColor(Color.TRANSPARENT);
@@ -144,6 +153,18 @@ final class VietMapWidgetHost extends FrameLayout {
         return 112;
     }
 
+    static int widthDpForPreset(int preset) {
+        return preset == Prefs.WIDGET_PRESET_EXPANDED ? 460 : 300;
+    }
+
+    static int heightDpForPreset(int preset) {
+        return preset == Prefs.WIDGET_PRESET_EXPANDED ? 150 : 92;
+    }
+
+    static Bundle optionsForPreset(int preset) {
+        return optionsForDimensions(widthDpForPreset(preset), heightDpForPreset(preset));
+    }
+
     void reload() {
         removeAllViews();
         hostView = null;
@@ -172,12 +193,12 @@ final class VietMapWidgetHost extends FrameLayout {
         }
 
         try {
-            int widthDp = Prefs.vietMapWidgetWidthDp(context);
-            int heightDp = Prefs.vietMapWidgetHeightDp(context);
+            int widthDp = Prefs.vietMapWidgetWidthDp(context, phonePreview);
+            int heightDp = Prefs.vietMapWidgetHeightDp(context, phonePreview);
             if (widthDp <= 0 || heightDp <= 0) {
-                int size = Prefs.vietMapWidgetSize(context);
-                widthDp = widthDpForSize(size);
-                heightDp = heightDpForSize(size);
+                int preset = Prefs.vietMapWidgetPreset(context, phonePreview);
+                widthDp = widthDpForPreset(preset);
+                heightDp = heightDpForPreset(preset);
             }
             manager.updateAppWidgetOptions(id, optionsForDimensions(widthDp, heightDp));
             hostView = host.createView(context, id, info);
@@ -320,16 +341,19 @@ final class VietMapWidgetHost extends FrameLayout {
     }
 
     void startListening() {
-        if (listening) return;
+        if (destroyed || listening) return;
         try {
             host.startListening();
             listening = true;
             requestTransparentPasses();
+            watchdogHandler.removeCallbacks(watchdogRunnable);
+            watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_MS);
         } catch (Throwable ignored) {
         }
     }
 
     void stopListening() {
+        watchdogHandler.removeCallbacks(watchdogRunnable);
         if (!listening) return;
         try {
             host.stopListening();
@@ -339,9 +363,68 @@ final class VietMapWidgetHost extends FrameLayout {
     }
 
     void destroy() {
+        destroyed = true;
         stopListening();
+        watchdogHandler.removeCallbacksAndMessages(null);
         removeAllViews();
         hostView = null;
+    }
+
+    private void onRemoteViewsUpdated() {
+        lastRemoteViewsUpdateAt = android.os.SystemClock.elapsedRealtime();
+        unhealthyWatchdogTicks = 0;
+        if (!destroyed) {
+            post(this::requestTransparentPasses);
+        }
+    }
+
+    private final Runnable watchdogRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (destroyed || !listening) return;
+            boolean unhealthy = false;
+            int id = Prefs.vietMapWidgetId(context);
+
+            if (!Prefs.vietMapWidgetEnabled(context) || id == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                unhealthyWatchdogTicks = 0;
+            } else if (!isVietMapInstalled(context)) {
+                unhealthy = true;
+            } else {
+                AppWidgetProviderInfo info = null;
+                try {
+                    info = AppWidgetManager.getInstance(context).getAppWidgetInfo(id);
+                } catch (Throwable ignored) {
+                }
+                if (info == null || hostView == null) {
+                    unhealthy = true;
+                } else {
+                    boolean containerHasSize = getWidth() > 0 && getHeight() > 0;
+                    boolean hostHasSize = hostView.getWidth() > 0 && hostView.getHeight() > 0;
+                    boolean emptyTree = hostView.getChildCount() == 0;
+                    boolean detachedUnexpectedly = isAttachedToWindow() && !hostView.isAttachedToWindow();
+                    unhealthy = (containerHasSize && !hostHasSize) || emptyTree || detachedUnexpectedly;
+                }
+            }
+
+            if (unhealthy) {
+                unhealthyWatchdogTicks++;
+                if (unhealthyWatchdogTicks >= 2) {
+                    unhealthyWatchdogTicks = 0;
+                    reload();
+                }
+            } else {
+                unhealthyWatchdogTicks = 0;
+                requestTransparentPasses();
+            }
+
+            if (!destroyed && listening) {
+                watchdogHandler.postDelayed(this, WATCHDOG_MS);
+            }
+        }
+    };
+
+    long lastRemoteViewsUpdateAt() {
+        return lastRemoteViewsUpdateAt;
     }
 
     private void applyFrameBounds(int left, int top, int width, int height, View parent) {
@@ -375,7 +458,7 @@ final class VietMapWidgetHost extends FrameLayout {
         int freeY = Math.max(1, parent.getHeight() - height);
         float x = Math.max(0f, Math.min(1f, lp.leftMargin / (float) freeX));
         float y = Math.max(0f, Math.min(1f, lp.topMargin / (float) freeY));
-        Prefs.setVietMapWidgetCustomLayout(context, x, y, pxToDp(width), pxToDp(height));
+        Prefs.setVietMapWidgetCustomLayout(context, phonePreview, x, y, pxToDp(width), pxToDp(height));
     }
 
     private void updateWidgetOptionsForBounds() {
@@ -442,21 +525,31 @@ final class VietMapWidgetHost extends FrameLayout {
         return Math.round(value / getResources().getDisplayMetrics().density);
     }
 
+    private interface HostUpdateListener {
+        void onUpdated();
+    }
+
     private static final class TransparentWidgetHost extends AppWidgetHost {
-        TransparentWidgetHost(Context context, int hostId) {
+        private final HostUpdateListener listener;
+
+        TransparentWidgetHost(Context context, int hostId, HostUpdateListener listener) {
             super(context, hostId);
+            this.listener = listener;
         }
 
         @Override
         protected AppWidgetHostView onCreateView(Context context, int appWidgetId,
                                                   AppWidgetProviderInfo appWidget) {
-            return new TransparentHostView(context);
+            return new TransparentHostView(context, listener);
         }
     }
 
     private static final class TransparentHostView extends AppWidgetHostView {
-        TransparentHostView(Context context) {
+        private final HostUpdateListener listener;
+
+        TransparentHostView(Context context, HostUpdateListener listener) {
             super(context);
+            this.listener = listener;
             setBackgroundColor(Color.TRANSPARENT);
             setPadding(0, 0, 0, 0);
         }
@@ -466,6 +559,7 @@ final class VietMapWidgetHost extends FrameLayout {
         @Override
         public void updateAppWidget(RemoteViews remoteViews) {
             super.updateAppWidget(remoteViews);
+            if (listener != null) listener.onUpdated();
             setBackgroundColor(Color.TRANSPARENT);
 
             // Do NOT use delayed background stripping here. VietMap may update

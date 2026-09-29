@@ -114,7 +114,7 @@ final class SplitBrowserView extends LinearLayout {
         safeCover.setBackgroundColor(Color.BLACK);
         stage.addView(safeCover, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
-        vietMapWidget = new VietMapWidgetHost(context);
+        vietMapWidget = new VietMapWidgetHost(context, phonePreview);
         stage.addView(vietMapWidget, widgetLayoutParams());
 
         controlPanel = buildControlPanel();
@@ -197,8 +197,19 @@ final class SplitBrowserView extends LinearLayout {
         positionButton.setOnClickListener(v -> toggleWidgetEditMode());
         rail.addView(positionButton, railButtonParams());
 
-        sizeButton = railButton(sizeLabel(Prefs.vietMapWidgetSize(context)), "VietMap preset size");
-        sizeButton.setOnClickListener(v -> { cycleWidgetSize(); keepControlsAlive(); });
+        sizeButton = railButton(presetLabel(Prefs.vietMapWidgetPreset(context, phonePreview)),
+                "VietMap Compact / Expanded preset");
+        sizeButton.setOnClickListener(v -> { toggleWidgetPreset(); keepControlsAlive(); });
+        sizeButton.setOnLongClickListener(v -> {
+            Prefs.resetVietMapLayout(context, phonePreview);
+            sizeButton.setText(presetLabel(Prefs.vietMapWidgetPreset(context, phonePreview)));
+            vietMapWidget.reload();
+            applyWidgetLayout();
+            Toast.makeText(context, phonePreview ? "Đã reset layout VietMap trên điện thoại."
+                    : "Đã reset layout VietMap trên Android Auto.", Toast.LENGTH_SHORT).show();
+            keepControlsAlive();
+            return true;
+        });
         rail.addView(sizeButton, railButtonParams());
 
         Button reload = railButton("↻", "Reload");
@@ -463,20 +474,26 @@ final class SplitBrowserView extends LinearLayout {
             showControls();
             handler.removeCallbacks(hideControlsRunnable);
             Toast.makeText(context,
-                    "VM Edit: kéo 1 ngón để di chuyển, pinch 2 ngón để resize. Bấm VM ✓ để lưu và khóa.",
+                    phonePreview
+                            ? "VM Edit (Phone): kéo 1 ngón, pinch 2 ngón. VM ✓ để lưu riêng layout điện thoại."
+                            : "VM Edit (Car): kéo 1 ngón, pinch 2 ngón. VM ✓ để lưu riêng layout Android Auto.",
                     Toast.LENGTH_LONG).show();
         } else {
             scheduleControlsHide();
         }
     }
 
-    private void cycleWidgetSize() {
-        int size = (Prefs.vietMapWidgetSize(context) + 1) % 3;
-        Prefs.setVietMapWidgetSize(context, size);
-        Prefs.clearVietMapWidgetCustomSize(context);
-        sizeButton.setText(sizeLabel(size));
+    private void toggleWidgetPreset() {
+        int current = Prefs.vietMapWidgetPreset(context, phonePreview);
+        int preset = current == Prefs.WIDGET_PRESET_COMPACT
+                ? Prefs.WIDGET_PRESET_EXPANDED : Prefs.WIDGET_PRESET_COMPACT;
+        Prefs.setVietMapWidgetPreset(context, phonePreview, preset);
+        Prefs.clearVietMapWidgetCustomSize(context, phonePreview);
+        sizeButton.setText(presetLabel(preset));
         vietMapWidget.reload();
         applyWidgetLayout();
+        Toast.makeText(context, preset == Prefs.WIDGET_PRESET_COMPACT
+                ? "VietMap Compact" : "VietMap Expanded", Toast.LENGTH_SHORT).show();
     }
 
     private String positionLabel(int pos) {
@@ -486,23 +503,21 @@ final class SplitBrowserView extends LinearLayout {
         return "VM ↗";
     }
 
-    private String sizeLabel(int size) {
-        if (size == Prefs.WIDGET_SMALL) return "VM S";
-        if (size == Prefs.WIDGET_LARGE) return "VM L";
-        return "VM M";
+    private String presetLabel(int preset) {
+        return preset == Prefs.WIDGET_PRESET_EXPANDED ? "VM X" : "VM C";
     }
 
     private FrameLayout.LayoutParams widgetLayoutParams() {
-        int size = Prefs.vietMapWidgetSize(context);
-        int customWidthDp = Prefs.vietMapWidgetWidthDp(context);
-        int customHeightDp = Prefs.vietMapWidgetHeightDp(context);
-        int width = dp(customWidthDp > 0 ? customWidthDp : VietMapWidgetHost.widthDpForSize(size));
-        int height = dp(customHeightDp > 0 ? customHeightDp : VietMapWidgetHost.heightDpForSize(size));
+        int preset = Prefs.vietMapWidgetPreset(context, phonePreview);
+        int customWidthDp = Prefs.vietMapWidgetWidthDp(context, phonePreview);
+        int customHeightDp = Prefs.vietMapWidgetHeightDp(context, phonePreview);
+        int width = dp(customWidthDp > 0 ? customWidthDp : VietMapWidgetHost.widthDpForPreset(preset));
+        int height = dp(customHeightDp > 0 ? customHeightDp : VietMapWidgetHost.heightDpForPreset(preset));
 
         int stageWidth = stage == null ? 0 : stage.getWidth();
         int stageHeight = stage == null ? 0 : stage.getHeight();
-        float customX = Prefs.vietMapWidgetX(context);
-        float customY = Prefs.vietMapWidgetY(context);
+        float customX = Prefs.vietMapWidgetX(context, phonePreview);
+        float customY = Prefs.vietMapWidgetY(context, phonePreview);
 
         if (stageWidth > 0 && stageHeight > 0 && customX >= 0f && customY >= 0f) {
             width = Math.min(width, stageWidth);
@@ -516,7 +531,7 @@ final class SplitBrowserView extends LinearLayout {
         }
 
         int gravity;
-        switch (Prefs.vietMapWidgetPosition(context)) {
+        switch (Prefs.vietMapWidgetPosition(context, phonePreview)) {
             case Prefs.POS_TOP_LEFT:
                 gravity = Gravity.TOP | Gravity.START;
                 break;
@@ -726,6 +741,7 @@ final class SplitBrowserView extends LinearLayout {
         content.onResume();
         vietMapWidget.startListening();
         vietMapWidget.reload();
+        if (sizeButton != null) sizeButton.setText(presetLabel(Prefs.vietMapWidgetPreset(context, phonePreview)));
         applyWidgetLayout();
         if (mediaSession != null) mediaSession.setActive(true);
     }
@@ -770,7 +786,7 @@ final class SplitBrowserView extends LinearLayout {
 
         @Override
         public boolean onInterceptTouchEvent(MotionEvent ev) {
-            // v1.5.2: never reveal the control rail from a tap on the media area.
+            // v1.6: never reveal the control rail from a tap on the media area.
             // When hidden, touches must pass through to YouTube/Web/VietMap. The
             // only way to reveal the rail is the dedicated left-edge handle.
             if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && controlsVisible) {
