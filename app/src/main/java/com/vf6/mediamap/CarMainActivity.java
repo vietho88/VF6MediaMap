@@ -1,7 +1,6 @@
 package com.vf6.mediamap;
 
 import android.os.Bundle;
-import android.view.View;
 
 import com.google.android.apps.auto.sdk.CarActivity;
 import com.google.android.apps.auto.sdk.CarUiController;
@@ -13,16 +12,18 @@ public class CarMainActivity extends CarActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setIgnoreConfigChanges(0xFFFFFFFF);
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN |
-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
 
-        CarUiController c = getCarUiController();
-        if (c != null) {
+        // CarActivity is not a normal android.app.Activity, so do not call
+        // getWindow(). Use the Android Auto UI controller instead. This is
+        // the same approach used by current Fermata Auto.
+        CarUiController controller = getCarUiController();
+        if (controller != null) {
             try {
-                c.getStatusBarController().showTitle();
-                c.getStatusBarController().setTitle("VF6 MediaMap");
+                controller.getStatusBarController().hideAppHeader();
+            } catch (Throwable ignored) {
+            }
+            try {
+                controller.getMenuController().hideMenuButton();
             } catch (Throwable ignored) {
             }
         }
@@ -31,7 +32,21 @@ public class CarMainActivity extends CarActivity {
         setContentView(view);
     }
 
-    @Override public void onResume() { super.onResume(); if (view != null) view.onResume(); }
-    @Override public void onPause() { if (view != null) view.onPause(); super.onPause(); }
-    @Override public void onDestroy() { if (view != null) view.destroy(); super.onDestroy(); }
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (view != null) view.onResume();
+    }
+
+    @Override
+    public void onPause() {
+        if (view != null) view.onPause();
+        super.onPause();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (view != null) view.destroy();
+        super.onDestroy();
+    }
 }
