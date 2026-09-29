@@ -50,7 +50,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: VF6MediaMap-v1.2.0-debug-apk
+          name: VF6MediaMap-v1.4.0-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 

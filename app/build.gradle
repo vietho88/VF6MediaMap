@@ -10,8 +10,8 @@ android {
         applicationId = 'com.vf6.mediamap'
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = '1.2.0'
+        versionCode = 7
+        versionName = '1.4.0'
     }
 
     buildTypes {
@@ -30,5 +30,4 @@ dependencies {
     implementation files('libs/aauto.aar')
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.core:core:1.17.0'
-    implementation 'org.osmdroid:osmdroid-android:6.1.20'
 }

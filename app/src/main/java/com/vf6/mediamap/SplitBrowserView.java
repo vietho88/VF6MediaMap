@@ -20,7 +20,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
-import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -43,22 +42,20 @@ final class SplitBrowserView extends LinearLayout {
 
     private final Context context;
     private final boolean phonePreview;
-    private final LinearLayout splitRow;
-    private final FrameLayout contentPane;
-    private final FrameLayout mapPane;
+    private final FrameLayout stage;
     private final WebView content;
-    private final NativeMapPane map;
+    private final TextView safeCover;
+    private final VietMapWidgetHost vietMapWidget;
     private Button modeButton;
-    private Button ratioButton;
+    private Button widgetButton;
+    private Button positionButton;
+    private Button sizeButton;
     private Button voiceButton;
     private Button playPauseButton;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private boolean safeMode;
-    private boolean swapped;
-    private int ratio;
     private boolean desiredPlaying;
-    private boolean voiceTargetMap;
     private boolean fullscreenAttempted;
     private boolean destroyed;
     private View fullscreenView;
@@ -70,8 +67,8 @@ final class SplitBrowserView extends LinearLayout {
         @Override
         public void run() {
             if (!destroyed) {
-                String keep = Prefs.keepPlaying(context) && desiredPlaying ?
-                        "if(v.paused){var p=v.play();if(p&&p.catch){p.catch(function(){});}}" : "";
+                String keep = Prefs.keepPlaying(context) && desiredPlaying && !safeMode
+                        ? "if(v.paused){var p=v.play();if(p&&p.catch){p.catch(function(){});}}" : "";
                 String js = "(function(){try{" +
                         "var v=document.querySelector('video');" +
                         "if(!v){return;}" + keep +
@@ -88,11 +85,8 @@ final class SplitBrowserView extends LinearLayout {
         super(context);
         this.context = context;
         this.phonePreview = phonePreview;
-        this.ratio = Prefs.ratio(context);
-        this.swapped = Prefs.swapped(context);
         this.safeMode = !phonePreview;
         this.desiredPlaying = Prefs.lastWasPlaying(context);
-        this.voiceTargetMap = this.safeMode;
 
         setOrientation(VERTICAL);
         setBackgroundColor(Color.BLACK);
@@ -100,17 +94,23 @@ final class SplitBrowserView extends LinearLayout {
 
         addView(buildToolbar(), new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
-        splitRow = new LinearLayout(context);
-        splitRow.setOrientation(HORIZONTAL);
-        splitRow.setBackgroundColor(Color.BLACK);
-        addView(splitRow, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
+        stage = new FrameLayout(context);
+        stage.setBackgroundColor(Color.BLACK);
+        addView(stage, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
 
-        contentPane = pane(Prefs.contentMode(context) == Prefs.MODE_WEB ? "WEB / TV" : "YOUTUBE");
-        mapPane = pane("MAP");
-        content = webView(true);
-        map = new NativeMapPane(context, this::activateMapVoiceTarget);
-        contentPane.addView(content, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-        mapPane.addView(map, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        content = webView();
+        stage.addView(content, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+
+        safeCover = new TextView(context);
+        safeCover.setText("DRIVE SAFE\nVietMap widget vẫn hoạt động");
+        safeCover.setTextColor(Color.LTGRAY);
+        safeCover.setTextSize(20);
+        safeCover.setGravity(Gravity.CENTER);
+        safeCover.setBackgroundColor(Color.BLACK);
+        stage.addView(safeCover, new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+
+        vietMapWidget = new VietMapWidgetHost(context);
+        stage.addView(vietMapWidget, widgetLayoutParams());
 
         setupMediaSession();
         setupSpeechRecognizer();
@@ -121,7 +121,7 @@ final class SplitBrowserView extends LinearLayout {
             if (last != null && (last.startsWith("https://") || last.startsWith("http://"))) firstUrl = last;
         }
         content.loadUrl(firstUrl);
-        rebuildSplit();
+        applyMode();
         handler.postDelayed(playbackMonitor, MONITOR_MS);
     }
 
@@ -132,25 +132,29 @@ final class SplitBrowserView extends LinearLayout {
         outer.setPadding(dp(3), dp(2), dp(3), dp(2));
 
         LinearLayout row1 = toolbarRow();
-        modeButton = smallButton(safeMode ? "Parked Split" : "Drive Safe");
+        modeButton = smallButton(safeMode ? "Parked Video" : "Drive Safe");
         modeButton.setOnClickListener(v -> toggleSafeMode());
-        row1.addView(modeButton, weightButton(1.2f));
+        row1.addView(modeButton, weightButton(1.1f));
 
-        ratioButton = smallButton(ratio + "/" + (100 - ratio));
-        ratioButton.setOnClickListener(v -> cycleRatio());
-        row1.addView(ratioButton, weightButton(0.8f));
+        widgetButton = smallButton(Prefs.vietMapWidgetEnabled(context) ? "VM On" : "VM Off");
+        widgetButton.setOnClickListener(v -> toggleWidget());
+        row1.addView(widgetButton, weightButton(0.75f));
 
-        Button swap = smallButton("Swap");
-        swap.setOnClickListener(v -> swap());
-        row1.addView(swap, weightButton(0.8f));
+        positionButton = smallButton(positionLabel(Prefs.vietMapWidgetPosition(context)));
+        positionButton.setOnClickListener(v -> cycleWidgetPosition());
+        row1.addView(positionButton, weightButton(0.8f));
+
+        sizeButton = smallButton(sizeLabel(Prefs.vietMapWidgetSize(context)));
+        sizeButton.setOnClickListener(v -> cycleWidgetSize());
+        row1.addView(sizeButton, weightButton(0.75f));
 
         Button fullscreen = smallButton("Full");
         fullscreen.setOnClickListener(v -> requestContentFullscreen());
-        row1.addView(fullscreen, weightButton(0.8f));
+        row1.addView(fullscreen, weightButton(0.7f));
         outer.addView(row1, new LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
 
         LinearLayout row2 = toolbarRow();
-        voiceButton = smallButton(safeMode ? "Mic Map" : "Mic YT");
+        voiceButton = smallButton(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
         voiceButton.setOnClickListener(v -> startVoiceSearch());
         row2.addView(voiceButton, weightButton(1.05f));
 
@@ -169,7 +173,7 @@ final class SplitBrowserView extends LinearLayout {
         Button reload = smallButton("Reload");
         reload.setOnClickListener(v -> {
             content.reload();
-            map.refresh();
+            vietMapWidget.reload();
         });
         row2.addView(reload, weightButton(0.9f));
         outer.addView(row2, new LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
@@ -188,23 +192,7 @@ final class SplitBrowserView extends LinearLayout {
         return new LayoutParams(0, LayoutParams.MATCH_PARENT, weight);
     }
 
-    private FrameLayout pane(String label) {
-        FrameLayout f = new FrameLayout(context);
-        f.setBackgroundColor(Color.BLACK);
-        TextView tag = new TextView(context);
-        tag.setText(label);
-        tag.setTextSize(10);
-        tag.setTextColor(Color.WHITE);
-        tag.setBackgroundColor(Color.argb(170, 0, 0, 0));
-        tag.setPadding(dp(6), dp(2), dp(6), dp(2));
-        FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
-        p.leftMargin = dp(4);
-        p.topMargin = dp(4);
-        f.addView(tag, p);
-        return f;
-    }
-
-    private WebView webView(boolean isContent) {
+    private WebView webView() {
         WebView w = new WebView(context);
         w.setBackgroundColor(Color.BLACK);
         w.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -214,7 +202,6 @@ final class SplitBrowserView extends LinearLayout {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setGeolocationEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
@@ -228,8 +215,7 @@ final class SplitBrowserView extends LinearLayout {
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
-
-        if (isContent) w.addJavascriptInterface(new PlaybackBridge(), "AndroidBridge");
+        w.addJavascriptInterface(new PlaybackBridge(), "AndroidBridge");
 
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -245,21 +231,12 @@ final class SplitBrowserView extends LinearLayout {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                if (isContent) {
-                    fullscreenAttempted = false;
-                    handler.postDelayed(() -> restorePlaybackIfNeeded(view, url), 1200L);
-                }
+                fullscreenAttempted = false;
+                handler.postDelayed(() -> restorePlaybackIfNeeded(view, url), 1200L);
             }
         });
 
         w.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
-                boolean granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                        || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-                callback.invoke(origin, granted, false);
-            }
-
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
                 showCustomView(view, callback);
@@ -270,12 +247,6 @@ final class SplitBrowserView extends LinearLayout {
                 hideCustomView();
             }
         });
-        if (isContent) {
-            w.setOnTouchListener((v, event) -> {
-                if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) activateContentVoiceTarget();
-                return false;
-            });
-        }
         return w;
     }
 
@@ -284,10 +255,6 @@ final class SplitBrowserView extends LinearLayout {
         String scheme = uri.getScheme();
         if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
 
-        // Google Maps mobile uses intent:// for the "Open app" button.
-        // v1.1.1 swallowed that navigation on the car because external intents
-        // were only allowed in phonePreview mode, and it preferred the browser
-        // fallback before even trying the native application.
         if ("intent".equalsIgnoreCase(scheme)) {
             try {
                 Intent intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME);
@@ -299,17 +266,14 @@ final class SplitBrowserView extends LinearLayout {
                     String fallback = intent.getStringExtra("browser_fallback_url");
                     if (fallback != null && (fallback.startsWith("https://") || fallback.startsWith("http://"))) {
                         view.loadUrl(fallback);
-                        return true;
                     }
+                    return true;
                 }
             } catch (Throwable ignored) {
+                return true;
             }
-            return true;
         }
 
-        // Support geo:, google.navigation:, market:, maps: and any other
-        // application deep link exposed by the page. This intentionally works
-        // in both the phone preview and the projected CarActivity.
         try {
             Intent external = new Intent(Intent.ACTION_VIEW, uri);
             external.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -327,7 +291,7 @@ final class SplitBrowserView extends LinearLayout {
         if (last == null || last.isEmpty() || positionMs < 1500L) return;
         if (!sameMediaPage(last, url)) return;
 
-        boolean shouldPlay = Prefs.lastWasPlaying(context);
+        boolean shouldPlay = Prefs.lastWasPlaying(context) && !safeMode;
         desiredPlaying = shouldPlay;
         double seconds = positionMs / 1000.0;
         String js = "(function(){var v=document.querySelector('video');if(!v)return;" +
@@ -354,64 +318,108 @@ final class SplitBrowserView extends LinearLayout {
 
     private void toggleSafeMode() {
         safeMode = !safeMode;
-        voiceTargetMap = safeMode;
         if (!safeMode && !phonePreview) {
-            Toast.makeText(context, "Parked Split: chỉ dùng video khi xe đã đỗ.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Parked Video: chỉ dùng video khi xe đã đỗ.", Toast.LENGTH_LONG).show();
         }
-        modeButton.setText(safeMode ? "Parked Split" : "Drive Safe");
-        updateVoiceLabel();
-        if (safeMode) hideCustomView();
-        rebuildSplit();
-    }
-
-    private void cycleRatio() {
-        if (ratio == 50) ratio = 60;
-        else if (ratio == 60) ratio = 70;
-        else ratio = 50;
-        Prefs.get(context).edit().putInt(Prefs.RATIO, ratio).apply();
-        ratioButton.setText(ratio + "/" + (100 - ratio));
-        rebuildSplit();
-    }
-
-    private void swap() {
-        swapped = !swapped;
-        Prefs.setSwapped(context, swapped);
-        rebuildSplit();
-    }
-
-    private void rebuildSplit() {
-        splitRow.removeAllViews();
         if (safeMode) {
-            splitRow.addView(mapPane, new LayoutParams(0, LayoutParams.MATCH_PARENT, 1));
-            contentPane.setVisibility(GONE);
-            mapPane.setVisibility(VISIBLE);
-            return;
+            desiredPlaying = false;
+            pauseMedia();
+            hideCustomView();
         }
+        applyMode();
+    }
 
-        contentPane.setVisibility(VISIBLE);
-        mapPane.setVisibility(VISIBLE);
-        float firstWeight = ratio;
-        float secondWeight = 100 - ratio;
-        if (!swapped) {
-            splitRow.addView(contentPane, new LayoutParams(0, LayoutParams.MATCH_PARENT, firstWeight));
-            splitRow.addView(mapPane, new LayoutParams(0, LayoutParams.MATCH_PARENT, secondWeight));
-        } else {
-            splitRow.addView(mapPane, new LayoutParams(0, LayoutParams.MATCH_PARENT, secondWeight));
-            splitRow.addView(contentPane, new LayoutParams(0, LayoutParams.MATCH_PARENT, firstWeight));
+    private void applyMode() {
+        safeCover.setVisibility(safeMode ? VISIBLE : GONE);
+        content.setVisibility(safeMode ? INVISIBLE : VISIBLE);
+        modeButton.setText(safeMode ? "Parked Video" : "Drive Safe");
+        applyWidgetLayout();
+    }
+
+    private void toggleWidget() {
+        boolean enabled = !Prefs.vietMapWidgetEnabled(context);
+        Prefs.setVietMapWidgetEnabled(context, enabled);
+        widgetButton.setText(enabled ? "VM On" : "VM Off");
+        vietMapWidget.reload();
+        applyWidgetLayout();
+    }
+
+    private void cycleWidgetPosition() {
+        int pos = (Prefs.vietMapWidgetPosition(context) + 1) % 4;
+        Prefs.setVietMapWidgetPosition(context, pos);
+        positionButton.setText(positionLabel(pos));
+        applyWidgetLayout();
+    }
+
+    private void cycleWidgetSize() {
+        int size = (Prefs.vietMapWidgetSize(context) + 1) % 3;
+        Prefs.setVietMapWidgetSize(context, size);
+        sizeButton.setText(sizeLabel(size));
+        vietMapWidget.reload();
+        applyWidgetLayout();
+    }
+
+    private String positionLabel(int pos) {
+        if (pos == Prefs.POS_TOP_LEFT) return "VM ↖";
+        if (pos == Prefs.POS_BOTTOM_RIGHT) return "VM ↘";
+        if (pos == Prefs.POS_BOTTOM_LEFT) return "VM ↙";
+        return "VM ↗";
+    }
+
+    private String sizeLabel(int size) {
+        if (size == Prefs.WIDGET_SMALL) return "VM S";
+        if (size == Prefs.WIDGET_LARGE) return "VM L";
+        return "VM M";
+    }
+
+    private FrameLayout.LayoutParams widgetLayoutParams() {
+        int size = Prefs.vietMapWidgetSize(context);
+        int width = dp(VietMapWidgetHost.widthDpForSize(size));
+        int height = dp(VietMapWidgetHost.heightDpForSize(size));
+        int gravity;
+        switch (Prefs.vietMapWidgetPosition(context)) {
+            case Prefs.POS_TOP_LEFT:
+                gravity = Gravity.TOP | Gravity.START;
+                break;
+            case Prefs.POS_BOTTOM_RIGHT:
+                gravity = Gravity.BOTTOM | Gravity.END;
+                break;
+            case Prefs.POS_BOTTOM_LEFT:
+                gravity = Gravity.BOTTOM | Gravity.START;
+                break;
+            case Prefs.POS_TOP_RIGHT:
+            default:
+                gravity = Gravity.TOP | Gravity.END;
+                break;
         }
+        FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(width, height, gravity);
+        p.setMargins(dp(8), dp(8), dp(8), dp(8));
+        return p;
+    }
+
+    private void applyWidgetLayout() {
+        if (vietMapWidget == null) return;
+        vietMapWidget.setVisibility(Prefs.vietMapWidgetEnabled(context) ? VISIBLE : GONE);
+        vietMapWidget.setLayoutParams(widgetLayoutParams());
+        vietMapWidget.bringToFront();
     }
 
     private void toggleVideoPlayback() {
+        if (safeMode) {
+            Toast.makeText(context, "Chuyển sang Parked Video khi xe đã đỗ.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         desiredPlaying = !desiredPlaying;
         String js = "(function(){var v=document.querySelector('video');if(!v)return 'no-video';" +
                 "if(v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){});return 'play';}" +
                 "v.pause();return 'pause';})()";
         content.evaluateJavascript(js, value -> {
-            if (Prefs.autoFullscreen(context) && desiredPlaying && !safeMode) requestContentFullscreen();
+            if (Prefs.autoFullscreen(context) && desiredPlaying) requestContentFullscreen();
         });
     }
 
     private void nextMedia() {
+        if (safeMode) return;
         desiredPlaying = true;
         String js = "(function(){" +
                 "var b=document.querySelector('.ytp-next-button,[aria-label*=Next],[aria-label*=next],[aria-label*=Tiếp]');" +
@@ -422,6 +430,7 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private void previousMedia() {
+        if (safeMode) return;
         String js = "(function(){" +
                 "var b=document.querySelector('.ytp-prev-button,[aria-label*=Previous],[aria-label*=previous],[aria-label*=Trước]');" +
                 "if(b){b.click();return 'clicked';}" +
@@ -432,7 +441,7 @@ final class SplitBrowserView extends LinearLayout {
 
     private void requestContentFullscreen() {
         if (safeMode) {
-            Toast.makeText(context, "Fullscreen video chỉ dùng ở Parked Split.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Fullscreen video chỉ dùng ở Parked Video.", Toast.LENGTH_SHORT).show();
             return;
         }
         String js = "(function(){var v=document.querySelector('video');if(!v)return 'no-video';" +
@@ -477,32 +486,11 @@ final class SplitBrowserView extends LinearLayout {
         handler.postDelayed(this::requestContentFullscreen, 450L);
     }
 
-    private boolean isMapVoiceTarget() {
-        return safeMode || voiceTargetMap;
-    }
-
-    private void activateMapVoiceTarget() {
-        voiceTargetMap = true;
-        updateVoiceLabel();
-    }
-
-    private void activateContentVoiceTarget() {
-        if (safeMode) return;
-        voiceTargetMap = false;
-        updateVoiceLabel();
-    }
-
-    private void updateVoiceLabel() {
-        if (voiceButton == null) return;
-        if (isMapVoiceTarget()) voiceButton.setText("Mic Map");
-        else voiceButton.setText(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
-    }
-
     private void setupMediaSession() {
         mediaSession = new MediaSession(context, "VF6MediaMap");
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { desiredPlaying = true; playMedia(); }
+            @Override public void onPlay() { if (!safeMode) { desiredPlaying = true; playMedia(); } }
             @Override public void onPause() { desiredPlaying = false; pauseMedia(); }
             @Override public void onSkipToNext() { nextMedia(); }
             @Override public void onSkipToPrevious() { previousMedia(); }
@@ -536,7 +524,7 @@ final class SplitBrowserView extends LinearLayout {
                     .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, title)
                     .build());
         }
-        playPauseButton.setText(playing ? "Ⅱ" : "▶");
+        if (playPauseButton != null) playPauseButton.setText(playing ? "Ⅱ" : "▶");
     }
 
     private void setupSpeechRecognizer() {
@@ -561,6 +549,10 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private void startVoiceSearch() {
+        if (safeMode) {
+            Toast.makeText(context, "Voice Search media chỉ dùng ở Parked Video.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(context, "Hãy cấp quyền Microphone trong app trên điện thoại.", Toast.LENGTH_LONG).show();
             return;
@@ -572,16 +564,12 @@ final class SplitBrowserView extends LinearLayout {
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag());
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, isMapVoiceTarget() ? "Search map" : "Search content");
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Search media");
         speechRecognizer.startListening(i);
     }
 
     private void applyVoiceQuery(String query) {
         if (query == null || query.trim().isEmpty()) return;
-        if (isMapVoiceTarget()) {
-            map.search(query.trim());
-            return;
-        }
         String q = Uri.encode(query.trim());
         if (Prefs.contentMode(context) == Prefs.MODE_YOUTUBE) {
             content.loadUrl("https://m.youtube.com/results?search_query=" + q);
@@ -591,18 +579,20 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private void restoreVoiceLabel() {
-        updateVoiceLabel();
+        if (voiceButton != null) voiceButton.setText(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
     }
 
     void onResume() {
         content.onResume();
-        map.onResume();
+        vietMapWidget.startListening();
+        vietMapWidget.reload();
+        applyWidgetLayout();
         if (mediaSession != null) mediaSession.setActive(true);
     }
 
     void onPause() {
         content.onPause();
-        map.onPause();
+        vietMapWidget.stopListening();
     }
 
     void destroy() {
@@ -619,8 +609,8 @@ final class SplitBrowserView extends LinearLayout {
             mediaSession.release();
             mediaSession = null;
         }
+        vietMapWidget.destroy();
         destroyWebView(content);
-        map.destroy();
     }
 
     private static void destroyWebView(WebView w) {

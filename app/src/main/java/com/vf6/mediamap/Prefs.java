@@ -6,10 +6,7 @@ import android.content.SharedPreferences;
 final class Prefs {
     static final String YOUTUBE_URL = "youtube_url";
     static final String WEB_URL = "web_url";
-    static final String MAP_URL = "map_url";
     static final String CONTENT_MODE = "content_mode";
-    static final String RATIO = "ratio";
-    static final String SWAPPED = "swapped";
     static final String AUTO_RESUME = "auto_resume";
     static final String KEEP_PLAYING = "keep_playing";
     static final String AUTO_FULLSCREEN = "auto_fullscreen";
@@ -19,12 +16,24 @@ final class Prefs {
     static final String LAST_DURATION_MS = "last_duration_ms";
     static final String LAST_WAS_PLAYING = "last_was_playing";
     static final String LAST_TITLE = "last_title";
-    static final String MAP_LAT = "map_lat";
-    static final String MAP_LON = "map_lon";
-    static final String MAP_ZOOM = "map_zoom";
+
+    static final String VIETMAP_WIDGET_ID = "vietmap_widget_id";
+    static final String VIETMAP_WIDGET_PROVIDER = "vietmap_widget_provider";
+    static final String VIETMAP_WIDGET_ENABLED = "vietmap_widget_enabled";
+    static final String VIETMAP_WIDGET_SIZE = "vietmap_widget_size";
+    static final String VIETMAP_WIDGET_POSITION = "vietmap_widget_position";
 
     static final int MODE_YOUTUBE = 0;
     static final int MODE_WEB = 1;
+
+    static final int WIDGET_SMALL = 0;
+    static final int WIDGET_MEDIUM = 1;
+    static final int WIDGET_LARGE = 2;
+
+    static final int POS_TOP_RIGHT = 0;
+    static final int POS_TOP_LEFT = 1;
+    static final int POS_BOTTOM_RIGHT = 2;
+    static final int POS_BOTTOM_LEFT = 3;
 
     static SharedPreferences get(Context c) {
         return c.getSharedPreferences("vf6_mediamap", Context.MODE_PRIVATE);
@@ -38,25 +47,12 @@ final class Prefs {
         return get(c).getString(WEB_URL, "https://www.google.com");
     }
 
-    // Kept for migration from v1.1.x. The native map no longer loads this URL.
-    static String map(Context c) {
-        return get(c).getString(MAP_URL, "https://www.google.com/maps");
-    }
-
     static int contentMode(Context c) {
         return get(c).getInt(CONTENT_MODE, MODE_YOUTUBE);
     }
 
     static String contentUrl(Context c) {
         return contentMode(c) == MODE_WEB ? web(c) : youtube(c);
-    }
-
-    static int ratio(Context c) {
-        return get(c).getInt(RATIO, 60);
-    }
-
-    static boolean swapped(Context c) {
-        return get(c).getBoolean(SWAPPED, false);
     }
 
     static boolean autoResume(Context c) {
@@ -91,27 +87,33 @@ final class Prefs {
         return get(c).getString(LAST_TITLE, "");
     }
 
-    static double mapLatitude(Context c) {
-        return Double.longBitsToDouble(get(c).getLong(MAP_LAT, Double.doubleToRawLongBits(16.0)));
+    static int vietMapWidgetId(Context c) {
+        return get(c).getInt(VIETMAP_WIDGET_ID, android.appwidget.AppWidgetManager.INVALID_APPWIDGET_ID);
     }
 
-    static double mapLongitude(Context c) {
-        return Double.longBitsToDouble(get(c).getLong(MAP_LON, Double.doubleToRawLongBits(108.0)));
+    static String vietMapWidgetProvider(Context c) {
+        return get(c).getString(VIETMAP_WIDGET_PROVIDER, "");
     }
 
-    static double mapZoom(Context c) {
-        return Double.longBitsToDouble(get(c).getLong(MAP_ZOOM, Double.doubleToRawLongBits(6.0)));
+    static boolean vietMapWidgetEnabled(Context c) {
+        return get(c).getBoolean(VIETMAP_WIDGET_ENABLED, true);
     }
 
-    static void save(Context c, String youtube, String web, String legacyMap, int contentMode,
-                     int ratio, boolean autoResume, boolean keepPlaying,
+    static int vietMapWidgetSize(Context c) {
+        return get(c).getInt(VIETMAP_WIDGET_SIZE, WIDGET_MEDIUM);
+    }
+
+    static int vietMapWidgetPosition(Context c) {
+        return get(c).getInt(VIETMAP_WIDGET_POSITION, POS_TOP_RIGHT);
+    }
+
+    static void save(Context c, String youtube, String web, int contentMode,
+                     boolean autoResume, boolean keepPlaying,
                      boolean autoFullscreen, int webScale) {
         get(c).edit()
                 .putString(YOUTUBE_URL, normalizeUrl(youtube, "https://m.youtube.com"))
                 .putString(WEB_URL, normalizeUrl(web, "https://www.google.com"))
-                .putString(MAP_URL, normalizeUrl(legacyMap, "https://www.google.com/maps"))
                 .putInt(CONTENT_MODE, contentMode == MODE_WEB ? MODE_WEB : MODE_YOUTUBE)
-                .putInt(RATIO, Math.max(30, Math.min(70, ratio)))
                 .putBoolean(AUTO_RESUME, autoResume)
                 .putBoolean(KEEP_PLAYING, keepPlaying)
                 .putBoolean(AUTO_FULLSCREEN, autoFullscreen)
@@ -119,17 +121,33 @@ final class Prefs {
                 .apply();
     }
 
-    static void setSwapped(Context c, boolean swapped) {
-        get(c).edit().putBoolean(SWAPPED, swapped).apply();
+    static void setVietMapWidget(Context c, int appWidgetId, String provider) {
+        get(c).edit()
+                .putInt(VIETMAP_WIDGET_ID, appWidgetId)
+                .putString(VIETMAP_WIDGET_PROVIDER, provider == null ? "" : provider)
+                .putBoolean(VIETMAP_WIDGET_ENABLED, true)
+                .apply();
     }
 
-    static void saveMapCamera(Context c, double lat, double lon, double zoom) {
-        if (!Double.isFinite(lat) || !Double.isFinite(lon) || !Double.isFinite(zoom)) return;
+    static void clearVietMapWidget(Context c) {
         get(c).edit()
-                .putLong(MAP_LAT, Double.doubleToRawLongBits(Math.max(-85.0, Math.min(85.0, lat))))
-                .putLong(MAP_LON, Double.doubleToRawLongBits(Math.max(-180.0, Math.min(180.0, lon))))
-                .putLong(MAP_ZOOM, Double.doubleToRawLongBits(Math.max(3.0, Math.min(19.0, zoom))))
+                .remove(VIETMAP_WIDGET_ID)
+                .remove(VIETMAP_WIDGET_PROVIDER)
                 .apply();
+    }
+
+    static void setVietMapWidgetEnabled(Context c, boolean enabled) {
+        get(c).edit().putBoolean(VIETMAP_WIDGET_ENABLED, enabled).apply();
+    }
+
+    static void setVietMapWidgetSize(Context c, int size) {
+        int value = Math.max(WIDGET_SMALL, Math.min(WIDGET_LARGE, size));
+        get(c).edit().putInt(VIETMAP_WIDGET_SIZE, value).apply();
+    }
+
+    static void setVietMapWidgetPosition(Context c, int position) {
+        int value = Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, position));
+        get(c).edit().putInt(VIETMAP_WIDGET_POSITION, value).apply();
     }
 
     static void savePlayback(Context c, String url, long positionMs, long durationMs,

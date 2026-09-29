@@ -2,6 +2,9 @@ package com.vf6.mediamap;
 
 import android.Manifest;
 import android.app.Activity;
+import android.appwidget.AppWidgetHost;
+import android.appwidget.AppWidgetManager;
+import android.appwidget.AppWidgetProviderInfo;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -21,19 +24,34 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends Activity {
+    private static final int REQ_BIND_WIDGET = 6407;
+    private static final int REQ_CONFIGURE_WIDGET = 6408;
+
     private EditText youtubeUrl;
     private EditText webUrl;
-        private Spinner contentMode;
-    private Spinner ratio;
+    private Spinner contentMode;
     private Spinner scale;
     private CheckBox autoResume;
     private CheckBox keepPlaying;
     private CheckBox autoFullscreen;
 
+    private TextView widgetStatus;
+    private Spinner widgetProviderSpinner;
+    private Spinner widgetSizeSpinner;
+    private Spinner widgetPositionSpinner;
+    private final List<AppWidgetProviderInfo> widgetProviders = new ArrayList<>();
+    private AppWidgetHost widgetHost;
+    private int pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setTitle("VF6 MediaMap");
+        widgetHost = new AppWidgetHost(this, VietMapWidgetHost.HOST_ID);
+
+        if (savedInstanceState != null) {
+            pendingWidgetId = savedInstanceState.getInt("pendingWidgetId", AppWidgetManager.INVALID_APPWIDGET_ID);
+        }
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
@@ -42,10 +60,13 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(20, 20, 24));
         scroll.addView(root);
 
-        root.addView(text("VF6 MediaMap 1.2.0", 26, true));
-        root.addView(text("YouTube/Web + bản đồ trong cùng giao diện Android Auto. Các tính năng video chỉ nên dùng khi xe đã đỗ.", 15, false), lpMatchWrap(dp(8)));
+        root.addView(text("VF6 MediaMap 1.4.0", 26, true));
+        root.addView(text(
+                "YouTube/Web toàn màn hình + thử host trực tiếp widget chuẩn Android của VietMap Live. " +
+                        "Nếu VietMap không công khai AppWidgetProvider thì app sẽ báo rõ để mình đổi hướng ở bản sau.",
+                15, false), lpMatchWrap(dp(8)));
 
-        root.addView(text("Nội dung bên trái", 14, true), lpMatchWrap(dp(20)));
+        root.addView(text("Nội dung", 14, true), lpMatchWrap(dp(20)));
         contentMode = new Spinner(this);
         contentMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"YouTube", "Web / TV portal"}));
@@ -59,20 +80,6 @@ public class MainActivity extends Activity {
         root.addView(text("Web / TV portal URL", 14, true), lpMatchWrap(dp(16)));
         webUrl = input(Prefs.web(this));
         root.addView(webUrl, lpMatchWrap(dp(6)));
-        root.addView(text("Native Map", 14, true), lpMatchWrap(dp(16)));
-        root.addView(text("OpenStreetMap native pane: pinch/drag, GPS, long-press destination, voice search and NAV handoff.", 13, false), lpMatchWrap(dp(6)));
-
-        root.addView(text("Tỷ lệ nội dung / Map", 14, true), lpMatchWrap(dp(16)));
-        ratio = new Spinner(this);
-        String[] ratios = {"50 / 50", "60 / 40", "70 / 30", "40 / 60", "30 / 70"};
-        ratio.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, ratios));
-        int current = Prefs.ratio(this);
-        if (current == 50) ratio.setSelection(0);
-        else if (current == 60) ratio.setSelection(1);
-        else if (current == 70) ratio.setSelection(2);
-        else if (current == 40) ratio.setSelection(3);
-        else ratio.setSelection(4);
-        root.addView(ratio, lpMatchWrap(dp(6)));
 
         root.addView(text("Tỷ lệ hiển thị WebView", 14, true), lpMatchWrap(dp(16)));
         scale = new Spinner(this);
@@ -87,16 +94,53 @@ public class MainActivity extends Activity {
 
         autoResume = check("Tự khôi phục video/trang gần nhất", Prefs.autoResume(this));
         root.addView(autoResume, lpMatchWrap(dp(18)));
-
         keepPlaying = check("Tự phục hồi nếu video bị pause ngoài ý muốn", Prefs.keepPlaying(this));
         root.addView(keepPlaying, lpMatchWrap(dp(6)));
-
-        autoFullscreen = check("Thử tự fullscreen video khi ở Parked Split", Prefs.autoFullscreen(this));
+        autoFullscreen = check("Thử tự fullscreen video ở chế độ Parked Video", Prefs.autoFullscreen(this));
         root.addView(autoFullscreen, lpMatchWrap(dp(6)));
+
+        root.addView(text("VietMap Live widget host (thử nghiệm)", 18, true), lpMatchWrap(dp(28)));
+        root.addView(text(
+                "Mục này tận dụng VietMap Live đang cài trên điện thoại. VF6 MediaMap chỉ host RemoteViews/AppWidget nếu VietMap có xuất bản widget Android chuẩn; không giả lập dữ liệu VietMap.",
+                13, false), lpMatchWrap(dp(6)));
+
+        widgetStatus = text("Đang kiểm tra VietMap…", 13, false);
+        widgetStatus.setTextColor(Color.LTGRAY);
+        root.addView(widgetStatus, lpMatchWrap(dp(10)));
+
+        root.addView(text("Widget provider", 14, true), lpMatchWrap(dp(14)));
+        widgetProviderSpinner = new Spinner(this);
+        root.addView(widgetProviderSpinner, lpMatchWrap(dp(6)));
+
+        root.addView(text("Kích thước overlay", 14, true), lpMatchWrap(dp(14)));
+        widgetSizeSpinner = new Spinner(this);
+        widgetSizeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Nhỏ 260×86dp", "Vừa 360×112dp", "Lớn 480×156dp"}));
+        widgetSizeSpinner.setSelection(Prefs.vietMapWidgetSize(this));
+        root.addView(widgetSizeSpinner, lpMatchWrap(dp(6)));
+
+        root.addView(text("Vị trí overlay", 14, true), lpMatchWrap(dp(14)));
+        widgetPositionSpinner = new Spinner(this);
+        widgetPositionSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Trên phải", "Trên trái", "Dưới phải", "Dưới trái"}));
+        widgetPositionSpinner.setSelection(Prefs.vietMapWidgetPosition(this));
+        root.addView(widgetPositionSpinner, lpMatchWrap(dp(6)));
+
+        Button refreshWidget = button("QUÉT LẠI WIDGET VIETMAP");
+        refreshWidget.setOnClickListener(v -> refreshWidgetProviders());
+        root.addView(refreshWidget, lpMatchWrap(dp(12)));
+
+        Button bindWidget = button("KẾT NỐI WIDGET VIETMAP");
+        bindWidget.setOnClickListener(v -> beginWidgetBinding());
+        root.addView(bindWidget, lpMatchWrap(dp(8)));
+
+        Button removeWidget = button("GỠ WIDGET ĐÃ KẾT NỐI");
+        removeWidget.setOnClickListener(v -> removeBoundWidget());
+        root.addView(removeWidget, lpMatchWrap(dp(8)));
 
         Button save = button("LƯU CẤU HÌNH");
         save.setOnClickListener(v -> savePrefs());
-        root.addView(save, lpMatchWrap(dp(22)));
+        root.addView(save, lpMatchWrap(dp(24)));
 
         Button preview = button("XEM THỬ TRÊN ĐIỆN THOẠI");
         preview.setOnClickListener(v -> {
@@ -105,49 +149,267 @@ public class MainActivity extends Activity {
         });
         root.addView(preview, lpMatchWrap(dp(10)));
 
-        Button reset = button("KHÔI PHỤC MẶC ĐỊNH");
-        reset.setOnClickListener(v -> resetDefaults());
+        Button reset = button("KHÔI PHỤC CẤU HÌNH MEDIA");
+        reset.setOnClickListener(v -> {
+            Prefs.get(this).edit()
+                    .remove(Prefs.YOUTUBE_URL)
+                    .remove(Prefs.WEB_URL)
+                    .remove(Prefs.CONTENT_MODE)
+                    .remove(Prefs.AUTO_RESUME)
+                    .remove(Prefs.KEEP_PLAYING)
+                    .remove(Prefs.AUTO_FULLSCREEN)
+                    .remove(Prefs.WEB_SCALE)
+                    .apply();
+            recreate();
+        });
         root.addView(reset, lpMatchWrap(dp(10)));
 
         TextView note = text(
-                "Điều khiển mới: Voice Search, Play/Pause, Next, Previous, Fullscreen, Swap và đổi tỷ lệ. " +
-                        "Android Auto cần bật Developer mode của Android Auto → Unknown sources. " +
-                        "Màn xe mặc định mở Drive Safe (Map toàn màn hình).",
+                "Sau khi bind thành công, Preview và CarActivity sẽ dùng cùng appWidgetId. " +
+                        "Nếu danh sách provider bằng 0 dù VietMap Live đã cài, widget Android Auto của VietMap không phải AppWidget chuẩn và không thể host theo cách này.",
                 13, false);
         note.setTextColor(Color.LTGRAY);
         root.addView(note, lpMatchWrap(dp(22)));
 
         setContentView(scroll);
+        refreshWidgetProviders();
         requestPermissionsIfNeeded();
     }
 
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putInt("pendingWidgetId", pendingWidgetId);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_BIND_WIDGET) {
+            int id = pendingWidgetId;
+            if (data != null) id = data.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+            if (resultCode == RESULT_OK && id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                pendingWidgetId = id;
+                finishWidgetBindingOrConfigure(id);
+            } else {
+                deleteWidgetId(id);
+                pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+                refreshWidgetProviders();
+            }
+            return;
+        }
+
+        if (requestCode == REQ_CONFIGURE_WIDGET) {
+            int id = pendingWidgetId;
+            if (data != null) id = data.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+            if (resultCode == RESULT_OK && id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                persistBoundWidget(id);
+            } else {
+                deleteWidgetId(id);
+                pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+                refreshWidgetProviders();
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (widgetHost != null) {
+            try {
+                widgetHost.startListening();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (widgetStatus != null) refreshWidgetProviders();
+    }
+
+    @Override
+    protected void onPause() {
+        if (widgetHost != null) {
+            try {
+                widgetHost.stopListening();
+            } catch (Throwable ignored) {
+            }
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (widgetHost != null) {
+            try {
+                widgetHost.stopListening();
+            } catch (Throwable ignored) {
+            }
+        }
+        super.onDestroy();
+    }
+
+    private void refreshWidgetProviders() {
+        widgetProviders.clear();
+        widgetProviders.addAll(VietMapWidgetHost.findVietMapProviders(this));
+        List<String> labels = new ArrayList<>();
+        for (AppWidgetProviderInfo info : widgetProviders) {
+            labels.add(VietMapWidgetHost.providerLabel(this, info) + "\n" + info.provider.flattenToShortString());
+        }
+        if (labels.isEmpty()) labels.add("Không tìm thấy AppWidgetProvider của VietMap Live");
+        widgetProviderSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, labels));
+
+        boolean installed = VietMapWidgetHost.isVietMapInstalled(this);
+        int boundId = Prefs.vietMapWidgetId(this);
+        AppWidgetProviderInfo boundInfo = null;
+        if (boundId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            try {
+                boundInfo = AppWidgetManager.getInstance(this).getAppWidgetInfo(boundId);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        StringBuilder status = new StringBuilder();
+        status.append("VietMap Live: ").append(installed ? "đã cài" : "không tìm thấy")
+                .append(" • AppWidgetProvider: ").append(widgetProviders.size());
+        if (boundInfo != null) {
+            status.append("\nĐã bind: ").append(VietMapWidgetHost.providerLabel(this, boundInfo))
+                    .append(" (#").append(boundId).append(")");
+        } else if (boundId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            status.append("\nappWidgetId cũ không còn hợp lệ: #").append(boundId);
+        }
+        widgetStatus.setText(status.toString());
+    }
+
+    private void beginWidgetBinding() {
+        saveWidgetLayoutPrefs();
+        if (widgetProviders.isEmpty()) {
+            Toast.makeText(this,
+                    "Không thấy AppWidgetProvider của VietMap. Hãy cập nhật VietMap Live rồi bấm Quét lại.",
+                    Toast.LENGTH_LONG).show();
+            refreshWidgetProviders();
+            return;
+        }
+
+        int index = Math.max(0, Math.min(widgetProviderSpinner.getSelectedItemPosition(), widgetProviders.size() - 1));
+        AppWidgetProviderInfo info = widgetProviders.get(index);
+        removeBoundWidget(false);
+
+        int id = widgetHost.allocateAppWidgetId();
+        pendingWidgetId = id;
+        Bundle options = VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this));
+        boolean allowed = false;
+        try {
+            allowed = AppWidgetManager.getInstance(this)
+                    .bindAppWidgetIdIfAllowed(id, info.provider, options);
+        } catch (Throwable ignored) {
+        }
+
+        if (allowed) {
+            finishWidgetBindingOrConfigure(id);
+            return;
+        }
+
+        Intent bindIntent = new Intent(AppWidgetManager.ACTION_APPWIDGET_BIND);
+        bindIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+        bindIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider);
+        bindIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, options);
+        try {
+            startActivityForResult(bindIntent, REQ_BIND_WIDGET);
+        } catch (Throwable error) {
+            deleteWidgetId(id);
+            pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+            Toast.makeText(this, "Android không cho mở màn hình bind widget: " + error.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void finishWidgetBindingOrConfigure(int id) {
+        AppWidgetProviderInfo info = null;
+        try {
+            info = AppWidgetManager.getInstance(this).getAppWidgetInfo(id);
+        } catch (Throwable ignored) {
+        }
+        if (info == null) {
+            deleteWidgetId(id);
+            pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+            Toast.makeText(this, "Không đọc được thông tin widget sau khi bind.", Toast.LENGTH_LONG).show();
+            refreshWidgetProviders();
+            return;
+        }
+
+        if (info.configure != null) {
+            try {
+                widgetHost.startAppWidgetConfigureActivityForResult(
+                        this, id, 0, REQ_CONFIGURE_WIDGET,
+                        VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this)));
+                return;
+            } catch (Throwable ignored) {
+                // Some providers declare a configure component that cannot be started by third-party hosts.
+                // Keep the bound widget and let RemoteViews decide what to render.
+            }
+        }
+        persistBoundWidget(id);
+    }
+
+    private void persistBoundWidget(int id) {
+        AppWidgetProviderInfo info = null;
+        try {
+            info = AppWidgetManager.getInstance(this).getAppWidgetInfo(id);
+        } catch (Throwable ignored) {
+        }
+        String provider = info != null && info.provider != null ? info.provider.flattenToString() : "";
+        Prefs.setVietMapWidget(this, id, provider);
+        pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+        Toast.makeText(this, "Đã kết nối widget VietMap. Bấm Xem thử trên điện thoại.", Toast.LENGTH_LONG).show();
+        refreshWidgetProviders();
+    }
+
+    private void removeBoundWidget() {
+        removeBoundWidget(true);
+    }
+
+    private void removeBoundWidget(boolean notify) {
+        int id = Prefs.vietMapWidgetId(this);
+        if (id != AppWidgetManager.INVALID_APPWIDGET_ID) deleteWidgetId(id);
+        Prefs.clearVietMapWidget(this);
+        if (notify) Toast.makeText(this, "Đã gỡ widget khỏi VF6 MediaMap.", Toast.LENGTH_SHORT).show();
+        refreshWidgetProviders();
+    }
+
+    private void deleteWidgetId(int id) {
+        if (id == AppWidgetManager.INVALID_APPWIDGET_ID || widgetHost == null) return;
+        try {
+            widgetHost.deleteAppWidgetId(id);
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void savePrefs() {
-        int[] ratios = {50, 60, 70, 40, 30};
         int[] scales = {75, 90, 100, 110, 125};
         Prefs.save(this,
                 youtubeUrl.getText().toString(),
                 webUrl.getText().toString(),
-                Prefs.map(this),
                 contentMode.getSelectedItemPosition(),
-                ratios[ratio.getSelectedItemPosition()],
                 autoResume.isChecked(),
                 keepPlaying.isChecked(),
                 autoFullscreen.isChecked(),
                 scales[scale.getSelectedItemPosition()]);
+        saveWidgetLayoutPrefs();
         Toast.makeText(this, "Đã lưu", Toast.LENGTH_SHORT).show();
     }
 
-    private void resetDefaults() {
-        Prefs.get(this).edit().clear().apply();
-        recreate();
+    private void saveWidgetLayoutPrefs() {
+        Prefs.setVietMapWidgetSize(this, widgetSizeSpinner.getSelectedItemPosition());
+        Prefs.setVietMapWidgetPosition(this, widgetPositionSpinner.getSelectedItemPosition());
+        int id = Prefs.vietMapWidgetId(this);
+        if (id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            try {
+                AppWidgetManager.getInstance(this).updateAppWidgetOptions(
+                        id, VietMapWidgetHost.optionsForSize(this, Prefs.vietMapWidgetSize(this)));
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     private void requestPermissionsIfNeeded() {
         List<String> missing = new ArrayList<>();
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
-            missing.add(Manifest.permission.ACCESS_COARSE_LOCATION);
-        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             missing.add(Manifest.permission.RECORD_AUDIO);
         }
