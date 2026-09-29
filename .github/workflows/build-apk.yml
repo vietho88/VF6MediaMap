@@ -1,0 +1,63 @@
+name: Build VF6 MediaMap APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Download Fermata AAuto bridge
+        run: |
+          mkdir -p app/libs
+          curl -L --fail --retry 4 \
+            "https://raw.githubusercontent.com/AndreyPavlenko/Fermata/master/fermata/lib/auto/aauto.aar" \
+            -o app/libs/aauto.aar
+          test $(stat -c%s app/libs/aauto.aar) -gt 100000
+          ls -lh app/libs/aauto.aar
+
+      - name: Set up Gradle 9.4.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.4.1'
+
+      - name: Build APK
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VF6MediaMap-v1.1-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VF6MediaMap-build-log
+          path: build.log
+          if-no-files-found: ignore
