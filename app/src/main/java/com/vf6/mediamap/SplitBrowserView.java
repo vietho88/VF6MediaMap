@@ -1,11 +1,11 @@
 package com.vf6.mediamap;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -17,8 +17,10 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -39,13 +41,17 @@ import java.util.Locale;
 
 final class SplitBrowserView extends LinearLayout {
     private static final long MONITOR_MS = 4000L;
+    private static final long CONTROLS_HIDE_MS = 2800L;
 
     private final Context context;
     private final boolean phonePreview;
-    private final FrameLayout stage;
+    private final TouchStage stage;
     private final WebView content;
     private final TextView safeCover;
     private final VietMapWidgetHost vietMapWidget;
+    private LinearLayout controlPanel;
+    private TextView controlHandle;
+    private boolean controlsVisible = true;
     private Button modeButton;
     private Button widgetButton;
     private Button positionButton;
@@ -53,6 +59,7 @@ final class SplitBrowserView extends LinearLayout {
     private Button voiceButton;
     private Button playPauseButton;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable hideControlsRunnable = this::hideControls;
 
     private boolean safeMode;
     private boolean desiredPlaying;
@@ -92,9 +99,7 @@ final class SplitBrowserView extends LinearLayout {
         setBackgroundColor(Color.BLACK);
         setKeepScreenOn(true);
 
-        addView(buildToolbar(), new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-
-        stage = new FrameLayout(context);
+        stage = new TouchStage(context);
         stage.setBackgroundColor(Color.BLACK);
         addView(stage, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
 
@@ -111,7 +116,23 @@ final class SplitBrowserView extends LinearLayout {
 
         vietMapWidget = new VietMapWidgetHost(context);
         stage.addView(vietMapWidget, widgetLayoutParams());
-        stage.post(this::applyWidgetLayout);
+
+        controlPanel = buildControlPanel();
+        FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(dp(78),
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.START | Gravity.CENTER_VERTICAL);
+        controlsLp.leftMargin = dp(8);
+        stage.addView(controlPanel, controlsLp);
+
+        controlHandle = buildControlHandle();
+        FrameLayout.LayoutParams handleLp = new FrameLayout.LayoutParams(dp(18), dp(74),
+                Gravity.START | Gravity.CENTER_VERTICAL);
+        stage.addView(controlHandle, handleLp);
+        controlHandle.setVisibility(GONE);
+
+        stage.post(() -> {
+            applyWidgetLayout();
+            showControls();
+        });
 
         setupMediaSession();
         setupSpeechRecognizer();
@@ -126,71 +147,160 @@ final class SplitBrowserView extends LinearLayout {
         handler.postDelayed(playbackMonitor, MONITOR_MS);
     }
 
-    private LinearLayout buildToolbar() {
-        LinearLayout outer = new LinearLayout(context);
-        outer.setOrientation(VERTICAL);
-        outer.setBackgroundColor(Color.rgb(28, 28, 32));
-        outer.setPadding(dp(3), dp(2), dp(3), dp(2));
+    private LinearLayout buildControlPanel() {
+        LinearLayout rail = new LinearLayout(context);
+        rail.setOrientation(VERTICAL);
+        rail.setGravity(Gravity.CENTER);
+        rail.setPadding(dp(4), dp(6), dp(4), dp(6));
+        rail.setElevation(dp(8));
 
-        LinearLayout row1 = toolbarRow();
-        modeButton = smallButton(safeMode ? "Parked Video" : "Drive Safe");
-        modeButton.setOnClickListener(v -> toggleSafeMode());
-        row1.addView(modeButton, weightButton(1.1f));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(205, 28, 46, 66));
+        bg.setCornerRadius(dp(18));
+        bg.setStroke(dp(1), Color.argb(190, 68, 150, 220));
+        rail.setBackground(bg);
 
-        widgetButton = smallButton(Prefs.vietMapWidgetEnabled(context) ? "VM On" : "VM Off");
-        widgetButton.setOnClickListener(v -> toggleWidget());
-        row1.addView(widgetButton, weightButton(0.75f));
+        modeButton = railButton(safeMode ? "VIDEO" : "SAFE", "Drive Safe / Parked Video");
+        modeButton.setOnClickListener(v -> { toggleSafeMode(); keepControlsAlive(); });
+        rail.addView(modeButton, railButtonParams());
 
-        positionButton = smallButton("VM Edit");
+        voiceButton = railButton("MIC", "Voice search");
+        voiceButton.setOnClickListener(v -> { startVoiceSearch(); keepControlsAlive(); });
+        rail.addView(voiceButton, railButtonParams());
+
+        playPauseButton = railButton("▶", "Play or pause");
+        playPauseButton.setOnClickListener(v -> { toggleVideoPlayback(); keepControlsAlive(); });
+        rail.addView(playPauseButton, railButtonParams());
+
+        Button next = railButton("⏭", "Next media");
+        next.setOnClickListener(v -> { nextMedia(); keepControlsAlive(); });
+        rail.addView(next, railButtonParams());
+
+        Button back = railButton("←", "Back");
+        back.setOnClickListener(v -> {
+            if (content.canGoBack()) content.goBack();
+            else previousMedia();
+            keepControlsAlive();
+        });
+        rail.addView(back, railButtonParams());
+
+        Button fullscreen = railButton("⛶", "Fullscreen video");
+        fullscreen.setOnClickListener(v -> { requestContentFullscreen(); keepControlsAlive(); });
+        rail.addView(fullscreen, railButtonParams());
+
+        widgetButton = railButton(Prefs.vietMapWidgetEnabled(context) ? "VM" : "VM×",
+                "Show or hide VietMap widget");
+        widgetButton.setOnClickListener(v -> { toggleWidget(); keepControlsAlive(); });
+        rail.addView(widgetButton, railButtonParams());
+
+        positionButton = railButton("VM E", "Edit VietMap position and size");
         positionButton.setOnClickListener(v -> toggleWidgetEditMode());
-        row1.addView(positionButton, weightButton(0.8f));
+        rail.addView(positionButton, railButtonParams());
 
-        sizeButton = smallButton(sizeLabel(Prefs.vietMapWidgetSize(context)));
-        sizeButton.setOnClickListener(v -> cycleWidgetSize());
-        row1.addView(sizeButton, weightButton(0.75f));
+        sizeButton = railButton(sizeLabel(Prefs.vietMapWidgetSize(context)), "VietMap preset size");
+        sizeButton.setOnClickListener(v -> { cycleWidgetSize(); keepControlsAlive(); });
+        rail.addView(sizeButton, railButtonParams());
 
-        Button fullscreen = smallButton("Full");
-        fullscreen.setOnClickListener(v -> requestContentFullscreen());
-        row1.addView(fullscreen, weightButton(0.7f));
-        outer.addView(row1, new LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
-
-        LinearLayout row2 = toolbarRow();
-        voiceButton = smallButton(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
-        voiceButton.setOnClickListener(v -> startVoiceSearch());
-        row2.addView(voiceButton, weightButton(1.05f));
-
-        Button prev = smallButton("⏮");
-        prev.setOnClickListener(v -> previousMedia());
-        row2.addView(prev, weightButton(0.65f));
-
-        playPauseButton = smallButton("▶/Ⅱ");
-        playPauseButton.setOnClickListener(v -> toggleVideoPlayback());
-        row2.addView(playPauseButton, weightButton(0.75f));
-
-        Button next = smallButton("⏭");
-        next.setOnClickListener(v -> nextMedia());
-        row2.addView(next, weightButton(0.65f));
-
-        Button reload = smallButton("Reload");
+        Button reload = railButton("↻", "Reload");
         reload.setOnClickListener(v -> {
             content.reload();
             vietMapWidget.reload();
+            keepControlsAlive();
         });
-        row2.addView(reload, weightButton(0.9f));
-        outer.addView(row2, new LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
+        rail.addView(reload, railButtonParams());
 
-        return outer;
+        return rail;
     }
 
-    private LinearLayout toolbarRow() {
-        LinearLayout row = new LinearLayout(context);
-        row.setOrientation(HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        return row;
+    private TextView buildControlHandle() {
+        TextView handle = new TextView(context);
+        handle.setText("›");
+        handle.setTextColor(Color.WHITE);
+        handle.setTextSize(22);
+        handle.setGravity(Gravity.CENTER);
+        handle.setContentDescription("Show controls");
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(185, 28, 46, 66));
+        float r = dp(12);
+        bg.setCornerRadii(new float[]{0,0,r,r,r,r,0,0});
+        handle.setBackground(bg);
+        handle.setOnClickListener(v -> showControls());
+        return handle;
     }
 
-    private LayoutParams weightButton(float weight) {
-        return new LayoutParams(0, LayoutParams.MATCH_PARENT, weight);
+    private LinearLayout.LayoutParams railButtonParams() {
+        return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40));
+    }
+
+    private Button railButton(String text, String description) {
+        Button b = new Button(context);
+        b.setText(text);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(text.length() > 3 ? 11 : 18);
+        b.setAllCaps(false);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(0, 0, 0, 0);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setContentDescription(description);
+        return b;
+    }
+
+    private void onStageInteraction() {
+        if (!controlsVisible) return;
+        scheduleControlsHide();
+    }
+
+    private void keepControlsAlive() {
+        showControls();
+    }
+
+    private void showControls() {
+        if (destroyed || controlPanel == null || controlHandle == null) return;
+        handler.removeCallbacks(hideControlsRunnable);
+        controlsVisible = true;
+        controlHandle.setVisibility(GONE);
+        controlPanel.animate().cancel();
+        controlPanel.setVisibility(VISIBLE);
+        controlPanel.setAlpha(1f);
+        controlPanel.setTranslationX(0f);
+        bringOverlayControlsToFront();
+        scheduleControlsHide();
+    }
+
+    private void scheduleControlsHide() {
+        handler.removeCallbacks(hideControlsRunnable);
+        if (destroyed) return;
+        if (vietMapWidget != null && vietMapWidget.isEditMode()) return;
+        handler.postDelayed(hideControlsRunnable, CONTROLS_HIDE_MS);
+    }
+
+    private void hideControls() {
+        if (controlPanel == null || controlHandle == null) return;
+        if (vietMapWidget != null && vietMapWidget.isEditMode()) return;
+        if (!controlsVisible) return;
+        controlsVisible = false;
+        controlPanel.animate().cancel();
+        controlPanel.animate()
+                .alpha(0f)
+                .translationX(-dp(16))
+                .setDuration(170L)
+                .withEndAction(() -> {
+                    if (!controlsVisible) {
+                        controlPanel.setVisibility(INVISIBLE);
+                        controlHandle.setVisibility(VISIBLE);
+                        controlHandle.bringToFront();
+                    }
+                })
+                .start();
+    }
+
+    private void bringOverlayControlsToFront() {
+        if (controlPanel != null) controlPanel.bringToFront();
+        if (controlHandle != null && controlHandle.getVisibility() == VISIBLE) controlHandle.bringToFront();
     }
 
     private WebView webView() {
@@ -333,14 +443,14 @@ final class SplitBrowserView extends LinearLayout {
     private void applyMode() {
         safeCover.setVisibility(safeMode ? VISIBLE : GONE);
         content.setVisibility(safeMode ? INVISIBLE : VISIBLE);
-        modeButton.setText(safeMode ? "Parked Video" : "Drive Safe");
+        modeButton.setText(safeMode ? "VIDEO" : "SAFE");
         applyWidgetLayout();
     }
 
     private void toggleWidget() {
         boolean enabled = !Prefs.vietMapWidgetEnabled(context);
         Prefs.setVietMapWidgetEnabled(context, enabled);
-        widgetButton.setText(enabled ? "VM On" : "VM Off");
+        widgetButton.setText(enabled ? "VM" : "VM×");
         vietMapWidget.reload();
         applyWidgetLayout();
     }
@@ -348,11 +458,15 @@ final class SplitBrowserView extends LinearLayout {
     private void toggleWidgetEditMode() {
         boolean edit = !vietMapWidget.isEditMode();
         vietMapWidget.setEditMode(edit);
-        positionButton.setText(edit ? "VM Lock" : "VM Edit");
+        positionButton.setText(edit ? "VM ✓" : "VM E");
         if (edit) {
+            showControls();
+            handler.removeCallbacks(hideControlsRunnable);
             Toast.makeText(context,
-                    "Widget edit: drag with one finger, pinch with two fingers to resize. VM S/M/L still works.",
+                    "VM Edit: kéo 1 ngón để di chuyển, pinch 2 ngón để resize. Bấm VM ✓ để lưu và khóa.",
                     Toast.LENGTH_LONG).show();
+        } else {
+            scheduleControlsHide();
         }
     }
 
@@ -428,6 +542,7 @@ final class SplitBrowserView extends LinearLayout {
         vietMapWidget.setLayoutParams(widgetLayoutParams());
         vietMapWidget.bringToFront();
         vietMapWidget.requestTransparentPasses();
+        bringOverlayControlsToFront();
     }
 
     private void toggleVideoPlayback() {
@@ -482,28 +597,27 @@ final class SplitBrowserView extends LinearLayout {
             callback.onCustomViewHidden();
             return;
         }
-        if (!(context instanceof Activity)) {
-            callback.onCustomViewHidden();
-            return;
-        }
         fullscreenView = view;
         fullscreenCallback = callback;
-        Activity activity = (Activity) context;
-        ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
-        decor.addView(view, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setVisibility(GONE);
+        stage.addView(view, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        view.bringToFront();
+        vietMapWidget.bringToFront();
+        bringOverlayControlsToFront();
+        showControls();
     }
 
     private void hideCustomView() {
         if (fullscreenView == null) return;
-        if (context instanceof Activity) {
-            ViewGroup decor = (ViewGroup) ((Activity) context).getWindow().getDecorView();
-            decor.removeView(fullscreenView);
-        }
+        ViewParent p = fullscreenView.getParent();
+        if (p instanceof ViewGroup) ((ViewGroup) p).removeView(fullscreenView);
         fullscreenView = null;
         if (fullscreenCallback != null) fullscreenCallback.onCustomViewHidden();
         fullscreenCallback = null;
-        setVisibility(VISIBLE);
+        if (!destroyed) {
+            applyWidgetLayout();
+            showControls();
+        }
     }
 
     private void maybeAutoFullscreen() {
@@ -557,7 +671,7 @@ final class SplitBrowserView extends LinearLayout {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) return;
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
-            @Override public void onReadyForSpeech(Bundle params) { voiceButton.setText("Nghe…"); }
+            @Override public void onReadyForSpeech(Bundle params) { voiceButton.setText("…"); }
             @Override public void onBeginningOfSpeech() { }
             @Override public void onRmsChanged(float rmsdB) { }
             @Override public void onBufferReceived(byte[] buffer) { }
@@ -605,7 +719,7 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private void restoreVoiceLabel() {
-        if (voiceButton != null) voiceButton.setText(Prefs.contentMode(context) == Prefs.MODE_WEB ? "Mic Web" : "Mic YT");
+        if (voiceButton != null) voiceButton.setText("MIC");
     }
 
     void onResume() {
@@ -649,13 +763,39 @@ final class SplitBrowserView extends LinearLayout {
         w.destroy();
     }
 
-    private Button smallButton(String text) {
-        Button b = new Button(context);
-        b.setText(text);
-        b.setTextSize(12);
-        b.setAllCaps(false);
-        b.setPadding(dp(2), 0, dp(2), 0);
-        return b;
+    private final class TouchStage extends FrameLayout {
+        private boolean revealGesture;
+
+        TouchStage(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent ev) {
+            int action = ev.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                if (!controlsVisible) {
+                    revealGesture = true;
+                    showControls();
+                    return true;
+                }
+                onStageInteraction();
+            }
+            if (revealGesture) return true;
+            return super.onInterceptTouchEvent(ev);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (revealGesture) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    revealGesture = false;
+                }
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
     }
 
     private int dp(int v) {

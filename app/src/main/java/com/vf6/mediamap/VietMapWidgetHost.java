@@ -17,6 +17,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
 import android.widget.RemoteViews;
 import android.widget.TextView;
@@ -209,10 +210,35 @@ final class VietMapWidgetHost extends FrameLayout {
     }
 
     void requestTransparentPasses() {
-        post(this::stripProviderBackgrounds);
-        postDelayed(this::stripProviderBackgrounds, 120L);
-        postDelayed(this::stripProviderBackgrounds, 600L);
-        postDelayed(this::stripProviderBackgrounds, 1800L);
+        if (hostView == null) return;
+
+        // VietMap refreshes its RemoteViews frequently (speed / warning data).
+        // Clearing the provider chrome with delayed callbacks made the original
+        // background visible for a frame on every refresh, which looked like
+        // a continuous flash. Strip it once immediately when possible and,
+        // more importantly, once again in onPreDraw so the provider background
+        // never reaches the screen.
+        if (hostView.getWidth() > 0 && hostView.getHeight() > 0) {
+            stripProviderBackgrounds();
+        }
+
+        if (hostView instanceof TransparentHostView) {
+            ((TransparentHostView) hostView).scheduleClearBeforeDraw();
+        } else {
+            final AppWidgetHostView target = hostView;
+            final ViewTreeObserver observer = target.getViewTreeObserver();
+            if (observer.isAlive()) {
+                observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        ViewTreeObserver current = target.getViewTreeObserver();
+                        if (current.isAlive()) current.removeOnPreDrawListener(this);
+                        stripProviderBackgrounds();
+                        return true;
+                    }
+                });
+            }
+        }
     }
 
     @Override
@@ -435,16 +461,49 @@ final class VietMapWidgetHost extends FrameLayout {
             setPadding(0, 0, 0, 0);
         }
 
+        private boolean clearBeforeDrawScheduled;
+
         @Override
         public void updateAppWidget(RemoteViews remoteViews) {
             super.updateAppWidget(remoteViews);
             setBackgroundColor(Color.TRANSPARENT);
-            post(this::clearProviderChrome);
-            postDelayed(this::clearProviderChrome, 120L);
-            postDelayed(this::clearProviderChrome, 600L);
+
+            // Do NOT use delayed background stripping here. VietMap may update
+            // RemoteViews every second; delayed stripping lets its opaque card
+            // draw first, then removes it, causing the visible flashing.
+            // Instead clear synchronously if we already have dimensions and
+            // install a one-shot pre-draw pass for the freshly inflated tree.
+            if (getWidth() > 0 && getHeight() > 0) {
+                clearProviderChrome();
+            }
+            scheduleClearBeforeDraw();
+        }
+
+        void scheduleClearBeforeDraw() {
+            if (clearBeforeDrawScheduled) return;
+            clearBeforeDrawScheduled = true;
+
+            final ViewTreeObserver observer = getViewTreeObserver();
+            if (!observer.isAlive()) {
+                clearBeforeDrawScheduled = false;
+                return;
+            }
+
+            observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    ViewTreeObserver current = getViewTreeObserver();
+                    if (current.isAlive()) current.removeOnPreDrawListener(this);
+                    clearBeforeDrawScheduled = false;
+                    clearProviderChrome();
+                    return true;
+                }
+            });
+            invalidate();
         }
 
         private void clearProviderChrome() {
+            setBackgroundColor(Color.TRANSPARENT);
             long rootArea = Math.max(1L, (long) Math.max(1, getWidth()) * Math.max(1, getHeight()));
             stripBackgroundsRecursive(this, rootArea, true);
         }
