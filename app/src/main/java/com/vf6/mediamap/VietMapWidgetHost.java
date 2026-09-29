@@ -7,12 +7,18 @@ import android.appwidget.AppWidgetProviderInfo;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
-import android.os.Bundle;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Process;
 import android.util.SizeF;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.FrameLayout;
+import android.widget.RemoteViews;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -24,15 +30,27 @@ final class VietMapWidgetHost extends FrameLayout {
     static final int HOST_ID = 6406;
     static final String VIETMAP_PACKAGE = "vn.vietmap.live";
 
+    private static final int MIN_WIDTH_DP = 180;
+    private static final int MIN_HEIGHT_DP = 64;
+
     private final Context context;
-    private final AppWidgetHost host;
+    private final TransparentWidgetHost host;
     private AppWidgetHostView hostView;
     private boolean listening;
+    private boolean editMode;
+
+    private float dragRawX;
+    private float dragRawY;
+    private int dragLeft;
+    private int dragTop;
+    private float pinchStartDistance;
+    private int pinchStartWidth;
+    private int pinchStartHeight;
 
     VietMapWidgetHost(Context context) {
         super(context);
         this.context = context;
-        this.host = new AppWidgetHost(context, HOST_ID);
+        this.host = new TransparentWidgetHost(context, HOST_ID);
         setClipChildren(true);
         setClipToPadding(true);
         setBackgroundColor(Color.TRANSPARENT);
@@ -92,18 +110,12 @@ final class VietMapWidgetHost extends FrameLayout {
     }
 
     static Bundle optionsForSize(Context context, int size) {
-        int widthDp;
-        int heightDp;
-        if (size == Prefs.WIDGET_SMALL) {
-            widthDp = 260;
-            heightDp = 86;
-        } else if (size == Prefs.WIDGET_LARGE) {
-            widthDp = 480;
-            heightDp = 156;
-        } else {
-            widthDp = 360;
-            heightDp = 112;
-        }
+        return optionsForDimensions(widthDpForSize(size), heightDpForSize(size));
+    }
+
+    static Bundle optionsForDimensions(int widthDp, int heightDp) {
+        widthDp = Math.max(MIN_WIDTH_DP, widthDp);
+        heightDp = Math.max(MIN_HEIGHT_DP, heightDp);
         Bundle options = new Bundle();
         options.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, widthDp);
         options.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widthDp);
@@ -136,13 +148,13 @@ final class VietMapWidgetHost extends FrameLayout {
         hostView = null;
 
         if (!Prefs.vietMapWidgetEnabled(context)) {
-            addPlaceholder("VietMap widget đang ẩn");
+            addPlaceholder("VietMap widget hidden");
             return;
         }
 
         int id = Prefs.vietMapWidgetId(context);
         if (id == AppWidgetManager.INVALID_APPWIDGET_ID) {
-            addPlaceholder("Chưa kết nối widget VietMap\nMở VF6 MediaMap trên điện thoại → Kết nối widget");
+            addPlaceholder("VietMap widget is not bound");
             return;
         }
 
@@ -154,18 +166,130 @@ final class VietMapWidgetHost extends FrameLayout {
             info = null;
         }
         if (info == null) {
-            addPlaceholder("Widget VietMap không còn hợp lệ\nHãy kết nối lại trên điện thoại");
+            addPlaceholder("VietMap widget binding is invalid");
             return;
         }
 
         try {
-            manager.updateAppWidgetOptions(id, optionsForSize(context, Prefs.vietMapWidgetSize(context)));
+            int widthDp = Prefs.vietMapWidgetWidthDp(context);
+            int heightDp = Prefs.vietMapWidgetHeightDp(context);
+            if (widthDp <= 0 || heightDp <= 0) {
+                int size = Prefs.vietMapWidgetSize(context);
+                widthDp = widthDpForSize(size);
+                heightDp = heightDpForSize(size);
+            }
+            manager.updateAppWidgetOptions(id, optionsForDimensions(widthDp, heightDp));
             hostView = host.createView(context, id, info);
             hostView.setAppWidget(id, info);
             hostView.setPadding(0, 0, 0, 0);
+            hostView.setBackgroundColor(Color.TRANSPARENT);
             addView(hostView, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            requestTransparentPasses();
         } catch (Throwable error) {
-            addPlaceholder("Không render được VietMap widget\n" + error.getClass().getSimpleName());
+            addPlaceholder("Cannot render VietMap widget: " + error.getClass().getSimpleName());
+        }
+    }
+
+    void setEditMode(boolean enabled) {
+        editMode = enabled;
+        if (enabled) {
+            GradientDrawable border = new GradientDrawable();
+            border.setColor(Color.TRANSPARENT);
+            border.setStroke(dp(2), Color.YELLOW);
+            setForeground(border);
+        } else {
+            setForeground(null);
+            saveCustomLayout();
+        }
+        invalidate();
+    }
+
+    boolean isEditMode() {
+        return editMode;
+    }
+
+    void requestTransparentPasses() {
+        post(this::stripProviderBackgrounds);
+        postDelayed(this::stripProviderBackgrounds, 120L);
+        postDelayed(this::stripProviderBackgrounds, 600L);
+        postDelayed(this::stripProviderBackgrounds, 1800L);
+    }
+
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent event) {
+        return editMode || super.onInterceptTouchEvent(event);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!editMode) return super.onTouchEvent(event);
+        ViewParent parentObject = getParent();
+        if (!(parentObject instanceof View)) return true;
+        View parent = (View) parentObject;
+        FrameLayout.LayoutParams lp = asFrameLayoutParams();
+        if (lp == null) return true;
+
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                dragRawX = event.getRawX();
+                dragRawY = event.getRawY();
+                dragLeft = lp.leftMargin;
+                dragTop = lp.topMargin;
+                pinchStartDistance = 0f;
+                return true;
+
+            case MotionEvent.ACTION_POINTER_DOWN:
+                if (event.getPointerCount() >= 2) {
+                    pinchStartDistance = pointerDistance(event);
+                    pinchStartWidth = getWidth();
+                    pinchStartHeight = getHeight();
+                }
+                return true;
+
+            case MotionEvent.ACTION_MOVE:
+                if (event.getPointerCount() >= 2) {
+                    float distance = pointerDistance(event);
+                    if (pinchStartDistance <= 0f) {
+                        pinchStartDistance = distance;
+                        pinchStartWidth = getWidth();
+                        pinchStartHeight = getHeight();
+                    }
+                    float scale = distance / Math.max(1f, pinchStartDistance);
+                    int minW = dp(MIN_WIDTH_DP);
+                    int minH = dp(MIN_HEIGHT_DP);
+                    int maxW = Math.max(minW, parent.getWidth() - dp(8));
+                    int maxH = Math.max(minH, parent.getHeight() - dp(8));
+                    int width = clamp(Math.round(pinchStartWidth * scale), minW, maxW);
+                    int height = clamp(Math.round(pinchStartHeight * scale), minH, maxH);
+                    applyFrameBounds(lp.leftMargin, lp.topMargin, width, height, parent);
+                } else {
+                    int left = dragLeft + Math.round(event.getRawX() - dragRawX);
+                    int top = dragTop + Math.round(event.getRawY() - dragRawY);
+                    applyFrameBounds(left, top, getWidth(), getHeight(), parent);
+                }
+                return true;
+
+            case MotionEvent.ACTION_POINTER_UP:
+                pinchStartDistance = 0f;
+                FrameLayout.LayoutParams now = asFrameLayoutParams();
+                if (now != null) {
+                    dragLeft = now.leftMargin;
+                    dragTop = now.topMargin;
+                }
+                dragRawX = event.getRawX();
+                dragRawY = event.getRawY();
+                return true;
+
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                pinchStartDistance = 0f;
+                saveCustomLayout();
+                updateWidgetOptionsForBounds();
+                requestTransparentPasses();
+                return true;
+
+            default:
+                return true;
         }
     }
 
@@ -174,6 +298,7 @@ final class VietMapWidgetHost extends FrameLayout {
         try {
             host.startListening();
             listening = true;
+            requestTransparentPasses();
         } catch (Throwable ignored) {
         }
     }
@@ -193,6 +318,73 @@ final class VietMapWidgetHost extends FrameLayout {
         hostView = null;
     }
 
+    private void applyFrameBounds(int left, int top, int width, int height, View parent) {
+        int maxWidth = Math.max(dp(MIN_WIDTH_DP), parent.getWidth());
+        int maxHeight = Math.max(dp(MIN_HEIGHT_DP), parent.getHeight());
+        width = clamp(width, dp(MIN_WIDTH_DP), maxWidth);
+        height = clamp(height, dp(MIN_HEIGHT_DP), maxHeight);
+        left = clamp(left, 0, Math.max(0, parent.getWidth() - width));
+        top = clamp(top, 0, Math.max(0, parent.getHeight() - height));
+
+        FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(width, height, Gravity.TOP | Gravity.START);
+        p.leftMargin = left;
+        p.topMargin = top;
+        setLayoutParams(p);
+    }
+
+    private FrameLayout.LayoutParams asFrameLayoutParams() {
+        ViewGroup.LayoutParams raw = getLayoutParams();
+        if (raw instanceof FrameLayout.LayoutParams) return (FrameLayout.LayoutParams) raw;
+        return null;
+    }
+
+    private void saveCustomLayout() {
+        ViewParent parentObject = getParent();
+        FrameLayout.LayoutParams lp = asFrameLayoutParams();
+        if (!(parentObject instanceof View) || lp == null) return;
+        View parent = (View) parentObject;
+        int width = Math.max(1, getWidth());
+        int height = Math.max(1, getHeight());
+        int freeX = Math.max(1, parent.getWidth() - width);
+        int freeY = Math.max(1, parent.getHeight() - height);
+        float x = Math.max(0f, Math.min(1f, lp.leftMargin / (float) freeX));
+        float y = Math.max(0f, Math.min(1f, lp.topMargin / (float) freeY));
+        Prefs.setVietMapWidgetCustomLayout(context, x, y, pxToDp(width), pxToDp(height));
+    }
+
+    private void updateWidgetOptionsForBounds() {
+        int id = Prefs.vietMapWidgetId(context);
+        if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return;
+        int widthDp = Math.max(MIN_WIDTH_DP, pxToDp(Math.max(1, getWidth())));
+        int heightDp = Math.max(MIN_HEIGHT_DP, pxToDp(Math.max(1, getHeight())));
+        try {
+            AppWidgetManager.getInstance(context).updateAppWidgetOptions(
+                    id, optionsForDimensions(widthDp, heightDp));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void stripProviderBackgrounds() {
+        if (hostView == null) return;
+        hostView.setBackgroundColor(Color.TRANSPARENT);
+        long rootArea = Math.max(1L, (long) Math.max(1, hostView.getWidth()) * Math.max(1, hostView.getHeight()));
+        stripBackgroundsRecursive(hostView, rootArea, true);
+    }
+
+    private static void stripBackgroundsRecursive(View view, long rootArea, boolean root) {
+        if (view == null) return;
+        if (view instanceof ViewGroup) {
+            long area = (long) Math.max(0, view.getWidth()) * Math.max(0, view.getHeight());
+            if (!root && area >= rootArea / 10L && view.getBackground() != null) {
+                view.setBackground(null);
+            }
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                stripBackgroundsRecursive(group.getChildAt(i), rootArea, false);
+            }
+        }
+    }
+
     private void addPlaceholder(String message) {
         TextView text = new TextView(context);
         text.setText(message);
@@ -204,7 +396,57 @@ final class VietMapWidgetHost extends FrameLayout {
         addView(text, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
     }
 
+    private float pointerDistance(MotionEvent event) {
+        if (event.getPointerCount() < 2) return 0f;
+        float dx = event.getX(0) - event.getX(1);
+        float dy = event.getY(0) - event.getY(1);
+        return (float) Math.sqrt(dx * dx + dy * dy);
+    }
+
+    private int clamp(int value, int min, int max) {
+        if (max < min) return min;
+        return Math.max(min, Math.min(max, value));
+    }
+
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private int pxToDp(int value) {
+        return Math.round(value / getResources().getDisplayMetrics().density);
+    }
+
+    private static final class TransparentWidgetHost extends AppWidgetHost {
+        TransparentWidgetHost(Context context, int hostId) {
+            super(context, hostId);
+        }
+
+        @Override
+        protected AppWidgetHostView onCreateView(Context context, int appWidgetId,
+                                                  AppWidgetProviderInfo appWidget) {
+            return new TransparentHostView(context);
+        }
+    }
+
+    private static final class TransparentHostView extends AppWidgetHostView {
+        TransparentHostView(Context context) {
+            super(context);
+            setBackgroundColor(Color.TRANSPARENT);
+            setPadding(0, 0, 0, 0);
+        }
+
+        @Override
+        public void updateAppWidget(RemoteViews remoteViews) {
+            super.updateAppWidget(remoteViews);
+            setBackgroundColor(Color.TRANSPARENT);
+            post(this::clearProviderChrome);
+            postDelayed(this::clearProviderChrome, 120L);
+            postDelayed(this::clearProviderChrome, 600L);
+        }
+
+        private void clearProviderChrome() {
+            long rootArea = Math.max(1L, (long) Math.max(1, getWidth()) * Math.max(1, getHeight()));
+            stripBackgroundsRecursive(this, rootArea, true);
+        }
     }
 }

@@ -111,6 +111,7 @@ final class SplitBrowserView extends LinearLayout {
 
         vietMapWidget = new VietMapWidgetHost(context);
         stage.addView(vietMapWidget, widgetLayoutParams());
+        stage.post(this::applyWidgetLayout);
 
         setupMediaSession();
         setupSpeechRecognizer();
@@ -140,8 +141,8 @@ final class SplitBrowserView extends LinearLayout {
         widgetButton.setOnClickListener(v -> toggleWidget());
         row1.addView(widgetButton, weightButton(0.75f));
 
-        positionButton = smallButton(positionLabel(Prefs.vietMapWidgetPosition(context)));
-        positionButton.setOnClickListener(v -> cycleWidgetPosition());
+        positionButton = smallButton("VM Edit");
+        positionButton.setOnClickListener(v -> toggleWidgetEditMode());
         row1.addView(positionButton, weightButton(0.8f));
 
         sizeButton = smallButton(sizeLabel(Prefs.vietMapWidgetSize(context)));
@@ -344,16 +345,21 @@ final class SplitBrowserView extends LinearLayout {
         applyWidgetLayout();
     }
 
-    private void cycleWidgetPosition() {
-        int pos = (Prefs.vietMapWidgetPosition(context) + 1) % 4;
-        Prefs.setVietMapWidgetPosition(context, pos);
-        positionButton.setText(positionLabel(pos));
-        applyWidgetLayout();
+    private void toggleWidgetEditMode() {
+        boolean edit = !vietMapWidget.isEditMode();
+        vietMapWidget.setEditMode(edit);
+        positionButton.setText(edit ? "VM Lock" : "VM Edit");
+        if (edit) {
+            Toast.makeText(context,
+                    "Widget edit: drag with one finger, pinch with two fingers to resize. VM S/M/L still works.",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     private void cycleWidgetSize() {
         int size = (Prefs.vietMapWidgetSize(context) + 1) % 3;
         Prefs.setVietMapWidgetSize(context, size);
+        Prefs.clearVietMapWidgetCustomSize(context);
         sizeButton.setText(sizeLabel(size));
         vietMapWidget.reload();
         applyWidgetLayout();
@@ -374,8 +380,27 @@ final class SplitBrowserView extends LinearLayout {
 
     private FrameLayout.LayoutParams widgetLayoutParams() {
         int size = Prefs.vietMapWidgetSize(context);
-        int width = dp(VietMapWidgetHost.widthDpForSize(size));
-        int height = dp(VietMapWidgetHost.heightDpForSize(size));
+        int customWidthDp = Prefs.vietMapWidgetWidthDp(context);
+        int customHeightDp = Prefs.vietMapWidgetHeightDp(context);
+        int width = dp(customWidthDp > 0 ? customWidthDp : VietMapWidgetHost.widthDpForSize(size));
+        int height = dp(customHeightDp > 0 ? customHeightDp : VietMapWidgetHost.heightDpForSize(size));
+
+        int stageWidth = stage == null ? 0 : stage.getWidth();
+        int stageHeight = stage == null ? 0 : stage.getHeight();
+        float customX = Prefs.vietMapWidgetX(context);
+        float customY = Prefs.vietMapWidgetY(context);
+
+        if (stageWidth > 0 && stageHeight > 0 && customX >= 0f && customY >= 0f) {
+            width = Math.min(width, stageWidth);
+            height = Math.min(height, stageHeight);
+            int freeX = Math.max(0, stageWidth - width);
+            int freeY = Math.max(0, stageHeight - height);
+            FrameLayout.LayoutParams custom = new FrameLayout.LayoutParams(width, height, Gravity.TOP | Gravity.START);
+            custom.leftMargin = Math.round(freeX * Math.max(0f, Math.min(1f, customX)));
+            custom.topMargin = Math.round(freeY * Math.max(0f, Math.min(1f, customY)));
+            return custom;
+        }
+
         int gravity;
         switch (Prefs.vietMapWidgetPosition(context)) {
             case Prefs.POS_TOP_LEFT:
@@ -402,6 +427,7 @@ final class SplitBrowserView extends LinearLayout {
         vietMapWidget.setVisibility(Prefs.vietMapWidgetEnabled(context) ? VISIBLE : GONE);
         vietMapWidget.setLayoutParams(widgetLayoutParams());
         vietMapWidget.bringToFront();
+        vietMapWidget.requestTransparentPasses();
     }
 
     private void toggleVideoPlayback() {

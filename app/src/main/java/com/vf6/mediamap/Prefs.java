@@ -22,6 +22,10 @@ final class Prefs {
     static final String VIETMAP_WIDGET_ENABLED = "vietmap_widget_enabled";
     static final String VIETMAP_WIDGET_SIZE = "vietmap_widget_size";
     static final String VIETMAP_WIDGET_POSITION = "vietmap_widget_position";
+    static final String VIETMAP_WIDGET_X = "vietmap_widget_x";
+    static final String VIETMAP_WIDGET_Y = "vietmap_widget_y";
+    static final String VIETMAP_WIDGET_WIDTH_DP = "vietmap_widget_width_dp";
+    static final String VIETMAP_WIDGET_HEIGHT_DP = "vietmap_widget_height_dp";
 
     static final int MODE_YOUTUBE = 0;
     static final int MODE_WEB = 1;
@@ -107,6 +111,22 @@ final class Prefs {
         return get(c).getInt(VIETMAP_WIDGET_POSITION, POS_TOP_RIGHT);
     }
 
+    static float vietMapWidgetX(Context c) {
+        return get(c).getFloat(VIETMAP_WIDGET_X, -1f);
+    }
+
+    static float vietMapWidgetY(Context c) {
+        return get(c).getFloat(VIETMAP_WIDGET_Y, -1f);
+    }
+
+    static int vietMapWidgetWidthDp(Context c) {
+        return get(c).getInt(VIETMAP_WIDGET_WIDTH_DP, 0);
+    }
+
+    static int vietMapWidgetHeightDp(Context c) {
+        return get(c).getInt(VIETMAP_WIDGET_HEIGHT_DP, 0);
+    }
+
     static void save(Context c, String youtube, String web, int contentMode,
                      boolean autoResume, boolean keepPlaying,
                      boolean autoFullscreen, int webScale) {
@@ -148,6 +168,29 @@ final class Prefs {
     static void setVietMapWidgetPosition(Context c, int position) {
         int value = Math.max(POS_TOP_RIGHT, Math.min(POS_BOTTOM_LEFT, position));
         get(c).edit().putInt(VIETMAP_WIDGET_POSITION, value).apply();
+    }
+
+    static void setVietMapWidgetCustomLayout(Context c, float x, float y, int widthDp, int heightDp) {
+        get(c).edit()
+                .putFloat(VIETMAP_WIDGET_X, Math.max(0f, Math.min(1f, x)))
+                .putFloat(VIETMAP_WIDGET_Y, Math.max(0f, Math.min(1f, y)))
+                .putInt(VIETMAP_WIDGET_WIDTH_DP, Math.max(160, widthDp))
+                .putInt(VIETMAP_WIDGET_HEIGHT_DP, Math.max(56, heightDp))
+                .apply();
+    }
+
+    static void clearVietMapWidgetCustomSize(Context c) {
+        get(c).edit()
+                .remove(VIETMAP_WIDGET_WIDTH_DP)
+                .remove(VIETMAP_WIDGET_HEIGHT_DP)
+                .apply();
+    }
+
+    static void clearVietMapWidgetCustomPosition(Context c) {
+        get(c).edit()
+                .remove(VIETMAP_WIDGET_X)
+                .remove(VIETMAP_WIDGET_Y)
+                .apply();
     }
 
     static void savePlayback(Context c, String url, long positionMs, long durationMs,
