@@ -124,7 +124,7 @@ final class SplitBrowserView extends LinearLayout {
         stage.addView(controlPanel, controlsLp);
 
         controlHandle = buildControlHandle();
-        FrameLayout.LayoutParams handleLp = new FrameLayout.LayoutParams(dp(18), dp(74),
+        FrameLayout.LayoutParams handleLp = new FrameLayout.LayoutParams(dp(28), dp(78),
                 Gravity.START | Gravity.CENTER_VERTICAL);
         stage.addView(controlHandle, handleLp);
         controlHandle.setVisibility(GONE);
@@ -764,37 +764,19 @@ final class SplitBrowserView extends LinearLayout {
     }
 
     private final class TouchStage extends FrameLayout {
-        private boolean revealGesture;
-
         TouchStage(Context context) {
             super(context);
         }
 
         @Override
         public boolean onInterceptTouchEvent(MotionEvent ev) {
-            int action = ev.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) {
-                if (!controlsVisible) {
-                    revealGesture = true;
-                    showControls();
-                    return true;
-                }
+            // v1.5.2: never reveal the control rail from a tap on the media area.
+            // When hidden, touches must pass through to YouTube/Web/VietMap. The
+            // only way to reveal the rail is the dedicated left-edge handle.
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && controlsVisible) {
                 onStageInteraction();
             }
-            if (revealGesture) return true;
             return super.onInterceptTouchEvent(ev);
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            if (revealGesture) {
-                int action = event.getActionMasked();
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    revealGesture = false;
-                }
-                return true;
-            }
-            return super.onTouchEvent(event);
         }
     }
 
