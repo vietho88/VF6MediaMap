@@ -60,10 +60,10 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(20, 20, 24));
         scroll.addView(root);
 
-        root.addView(text("VF6 MediaMap 1.6.0", 26, true));
+        root.addView(text("VF6 MediaMap 1.6.1", 26, true));
         root.addView(text(
-                "YouTube/Web toàn màn hình + VietMap Live widget. v1.6 có watchdog tự phục hồi, " +
-                        "layout riêng cho điện thoại/Android Auto và preset Compact/Expanded.",
+                "YouTube/Web toàn màn hình + VietMap Live widget. v1.6.1 thêm double-tap nút Back để tìm nhanh bằng mic " +
+                        "và nút kiểm tra/mở VietMap Live.",
                 15, false), lpMatchWrap(dp(8)));
 
         root.addView(text("Nội dung", 14, true), lpMatchWrap(dp(20)));
@@ -126,6 +126,10 @@ public class MainActivity extends Activity {
         widgetPositionSpinner.setSelection(Prefs.vietMapWidgetPosition(this, true));
         root.addView(widgetPositionSpinner, lpMatchWrap(dp(6)));
 
+        Button checkVml = button("KIỂM TRA / MỞ VIETMAP LIVE");
+        checkVml.setOnClickListener(v -> checkOrOpenVietMapLive());
+        root.addView(checkVml, lpMatchWrap(dp(12)));
+
         Button refreshWidget = button("QUÉT LẠI WIDGET VIETMAP");
         refreshWidget.setOnClickListener(v -> refreshWidgetProviders());
         root.addView(refreshWidget, lpMatchWrap(dp(12)));
@@ -183,7 +187,8 @@ public class MainActivity extends Activity {
         TextView note = text(
                 "Preview và CarActivity dùng cùng appWidgetId nhưng lưu vị trí/kích thước riêng. " +
                         "VM C/VM X đổi nhanh Compact/Expanded; giữ lâu nút preset để reset layout của màn hiện tại. " +
-                        "Watchdog chỉ reload khi widget bị mất cây view/provider, không reload theo timer bình thường.",
+                        "Watchdog chỉ reload khi widget bị mất cây view/provider. Trong side controls: bấm Back 1 lần = quay lại, " +
+                        "bấm Back 2 lần nhanh = tìm kiếm bằng mic; VML✓/VML?/VML× = trạng thái best-effort của VietMap Live.",
                 13, false);
         note.setTextColor(Color.LTGRAY);
         root.addView(note, lpMatchWrap(dp(22)));
@@ -261,6 +266,22 @@ public class MainActivity extends Activity {
             }
         }
         super.onDestroy();
+    }
+
+    private void checkOrOpenVietMapLive() {
+        if (!VietMapWidgetHost.isVietMapInstalled(this)) {
+            Toast.makeText(this, "Không tìm thấy VietMap Live trên điện thoại.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (VietMapWidgetHost.isVietMapProcessVisible(this)) {
+            Toast.makeText(this, "VietMap Live có vẻ đang chạy. Android có thể ẩn trạng thái service của app khác.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        boolean opened = VietMapWidgetHost.openVietMap(this);
+        Toast.makeText(this, opened
+                ? "Không xác nhận được VML đang chạy nên đã mở VietMap Live. Hãy bật cảnh báo/dẫn đường rồi quay lại."
+                : "Không mở được VietMap Live.",
+                Toast.LENGTH_LONG).show();
     }
 
     private void refreshWidgetProviders() {

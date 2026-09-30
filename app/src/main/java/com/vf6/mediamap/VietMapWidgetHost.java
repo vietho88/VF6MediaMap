@@ -1,10 +1,12 @@
 package com.vf6.mediamap;
 
+import android.app.ActivityManager;
 import android.appwidget.AppWidgetHost;
 import android.appwidget.AppWidgetHostView;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -71,6 +73,43 @@ final class VietMapWidgetHost extends FrameLayout {
         try {
             ApplicationInfo info = context.getPackageManager().getApplicationInfo(VIETMAP_PACKAGE, 0);
             return info.enabled;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Best-effort only. Modern Android does not guarantee that a normal app can
+     * enumerate services/processes belonging to another package. A recent widget
+     * RemoteViews update is therefore the stronger health signal in this project.
+     */
+    static boolean isVietMapProcessVisible(Context context) {
+        try {
+            ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) return false;
+            List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
+            if (processes == null) return false;
+            for (ActivityManager.RunningAppProcessInfo process : processes) {
+                if (process == null || process.processName == null) continue;
+                if (VIETMAP_PACKAGE.equals(process.processName)
+                        || process.processName.startsWith(VIETMAP_PACKAGE + ":")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    static boolean openVietMap(Context context) {
+        try {
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage(VIETMAP_PACKAGE);
+            if (launch == null) return false;
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            context.startActivity(launch);
+            return true;
         } catch (Throwable ignored) {
             return false;
         }
@@ -425,6 +464,16 @@ final class VietMapWidgetHost extends FrameLayout {
 
     long lastRemoteViewsUpdateAt() {
         return lastRemoteViewsUpdateAt;
+    }
+
+    long remoteViewsUpdateAgeMs() {
+        if (lastRemoteViewsUpdateAt <= 0L) return -1L;
+        return Math.max(0L, android.os.SystemClock.elapsedRealtime() - lastRemoteViewsUpdateAt);
+    }
+
+    boolean hasRecentRemoteViewsUpdate(long maxAgeMs) {
+        long age = remoteViewsUpdateAgeMs();
+        return age >= 0L && age <= Math.max(1000L, maxAgeMs);
     }
 
     private void applyFrameBounds(int left, int top, int width, int height, View parent) {

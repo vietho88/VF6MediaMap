@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -42,6 +43,9 @@ import java.util.Locale;
 final class SplitBrowserView extends LinearLayout {
     private static final long MONITOR_MS = 4000L;
     private static final long CONTROLS_HIDE_MS = 2800L;
+    private static final long BACK_DOUBLE_TAP_MS = 420L;
+    private static final long VML_STATUS_REFRESH_MS = 5000L;
+    private static final long VML_FRESH_UPDATE_MS = 30000L;
 
     private final Context context;
     private final boolean phonePreview;
@@ -58,8 +62,20 @@ final class SplitBrowserView extends LinearLayout {
     private Button sizeButton;
     private Button voiceButton;
     private Button playPauseButton;
+    private Button vmlButton;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable hideControlsRunnable = this::hideControls;
+    private long lastBackTapAt;
+    private Runnable pendingBackAction;
+
+    private final Runnable vmlStatusRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (destroyed) return;
+            updateVmlButton();
+            handler.postDelayed(this, VML_STATUS_REFRESH_MS);
+        }
+    };
 
     private boolean safeMode;
     private boolean desiredPlaying;
@@ -145,6 +161,7 @@ final class SplitBrowserView extends LinearLayout {
         content.loadUrl(firstUrl);
         applyMode();
         handler.postDelayed(playbackMonitor, MONITOR_MS);
+        handler.post(vmlStatusRunnable);
     }
 
     private LinearLayout buildControlPanel() {
@@ -176,12 +193,8 @@ final class SplitBrowserView extends LinearLayout {
         next.setOnClickListener(v -> { nextMedia(); keepControlsAlive(); });
         rail.addView(next, railButtonParams());
 
-        Button back = railButton("←", "Back");
-        back.setOnClickListener(v -> {
-            if (content.canGoBack()) content.goBack();
-            else previousMedia();
-            keepControlsAlive();
-        });
+        Button back = railButton("←", "Back. Double tap for quick voice search");
+        back.setOnClickListener(v -> handleBackButtonTap());
         rail.addView(back, railButtonParams());
 
         Button fullscreen = railButton("⛶", "Fullscreen video");
@@ -192,6 +205,17 @@ final class SplitBrowserView extends LinearLayout {
                 "Show or hide VietMap widget");
         widgetButton.setOnClickListener(v -> { toggleWidget(); keepControlsAlive(); });
         rail.addView(widgetButton, railButtonParams());
+
+        vmlButton = railButton("VML?", "Check or open VietMap Live on the phone");
+        vmlButton.setOnClickListener(v -> { checkOrOpenVietMap(); keepControlsAlive(); });
+        vmlButton.setOnLongClickListener(v -> {
+            boolean opened = VietMapWidgetHost.openVietMap(context);
+            Toast.makeText(context, opened ? "Đang mở VietMap Live trên điện thoại…"
+                    : "Không mở được VietMap Live.", Toast.LENGTH_SHORT).show();
+            keepControlsAlive();
+            return true;
+        });
+        rail.addView(vmlButton, railButtonParams());
 
         positionButton = railButton("VM E", "Edit VietMap position and size");
         positionButton.setOnClickListener(v -> toggleWidgetEditMode());
@@ -560,6 +584,79 @@ final class SplitBrowserView extends LinearLayout {
         bringOverlayControlsToFront();
     }
 
+    private void handleBackButtonTap() {
+        keepControlsAlive();
+        long now = SystemClock.elapsedRealtime();
+        if (lastBackTapAt > 0L && now - lastBackTapAt <= BACK_DOUBLE_TAP_MS) {
+            if (pendingBackAction != null) handler.removeCallbacks(pendingBackAction);
+            pendingBackAction = null;
+            lastBackTapAt = 0L;
+            startVoiceSearch();
+            return;
+        }
+
+        lastBackTapAt = now;
+        pendingBackAction = () -> {
+            lastBackTapAt = 0L;
+            pendingBackAction = null;
+            performSingleBackAction();
+            keepControlsAlive();
+        };
+        handler.postDelayed(pendingBackAction, BACK_DOUBLE_TAP_MS);
+    }
+
+    private void performSingleBackAction() {
+        if (content.canGoBack()) content.goBack();
+        else previousMedia();
+    }
+
+    private void updateVmlButton() {
+        if (vmlButton == null) return;
+        if (!VietMapWidgetHost.isVietMapInstalled(context)) {
+            vmlButton.setText("VML×");
+            vmlButton.setContentDescription("VietMap Live is not installed");
+            return;
+        }
+
+        boolean freshWidget = vietMapWidget.hasRecentRemoteViewsUpdate(VML_FRESH_UPDATE_MS);
+        boolean visibleProcess = VietMapWidgetHost.isVietMapProcessVisible(context);
+        if (freshWidget || visibleProcess) {
+            vmlButton.setText("VML✓");
+            vmlButton.setContentDescription("VietMap Live appears active");
+        } else {
+            vmlButton.setText("VML?");
+            vmlButton.setContentDescription("VietMap Live status unknown or inactive. Tap to open it");
+        }
+    }
+
+    private void checkOrOpenVietMap() {
+        updateVmlButton();
+        if (!VietMapWidgetHost.isVietMapInstalled(context)) {
+            Toast.makeText(context, "Không tìm thấy VietMap Live trên điện thoại.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        boolean freshWidget = vietMapWidget.hasRecentRemoteViewsUpdate(VML_FRESH_UPDATE_MS);
+        boolean visibleProcess = VietMapWidgetHost.isVietMapProcessVisible(context);
+        if (freshWidget || visibleProcess) {
+            long ageMs = vietMapWidget.remoteViewsUpdateAgeMs();
+            String detail = ageMs >= 0L
+                    ? " • widget cập nhật " + Math.max(0L, ageMs / 1000L) + " giây trước"
+                    : "";
+            Toast.makeText(context, "VietMap Live có vẻ đang hoạt động" + detail + ".", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean opened = VietMapWidgetHost.openVietMap(context);
+        if (opened) {
+            Toast.makeText(context,
+                    "VML chưa có dấu hiệu cập nhật. Đang mở VietMap Live trên điện thoại; khởi động cảnh báo/dẫn đường rồi quay lại VF6 MediaMap.",
+                    Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(context, "Không mở được VietMap Live.", Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void toggleVideoPlayback() {
         if (safeMode) {
             Toast.makeText(context, "Chuyển sang Parked Video khi xe đã đỗ.", Toast.LENGTH_SHORT).show();
@@ -741,12 +838,16 @@ final class SplitBrowserView extends LinearLayout {
         content.onResume();
         vietMapWidget.startListening();
         vietMapWidget.reload();
+        updateVmlButton();
+        handler.removeCallbacks(vmlStatusRunnable);
+        handler.post(vmlStatusRunnable);
         if (sizeButton != null) sizeButton.setText(presetLabel(Prefs.vietMapWidgetPreset(context, phonePreview)));
         applyWidgetLayout();
         if (mediaSession != null) mediaSession.setActive(true);
     }
 
     void onPause() {
+        handler.removeCallbacks(vmlStatusRunnable);
         content.onPause();
         vietMapWidget.stopListening();
     }
